@@ -604,13 +604,15 @@ class ORCATrajectoryNavigation(BaseNavigation):
                 polygon_array = np.floor(polygon_array).astype(int)
                 polygon_array = polygon_array.reshape((-1, 1, 2))
                 cv2.fillPoly(walkable_regions_mask, [polygon_array], [0, 0, 0])    
-            for polygon in self.engine.asset_manager.all_object_polygons:
-                polygon_array = np.array(polygon)
-                polygon_array += self.mask_translate
-                polygon_array = np.floor(polygon_array).astype(int)
-                polygon_array = polygon_array.reshape((-1, 1, 2))
-                cv2.fillPoly(walkable_regions_mask, [polygon_array], [0, 0, 0])
-            
+            try:
+                for polygon in self.engine.asset_manager.all_object_polygons:
+                    polygon_array = np.array(polygon)
+                    polygon_array += self.mask_translate
+                    polygon_array = np.floor(polygon_array).astype(int)
+                    polygon_array = polygon_array.reshape((-1, 1, 2))
+                    cv2.fillPoly(walkable_regions_mask, [polygon_array], [0, 0, 0])
+            except:
+                pass
             walkable_regions_mask = cv2.flip(walkable_regions_mask, 0)
             start_end_regions_mask = cv2.flip(start_end_regions_mask, 0)
         return start_end_regions_mask, walkable_regions_mask
