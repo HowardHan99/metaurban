@@ -604,7 +604,7 @@ import random, os
 
 class PedestrianAssetPaths:
     global PEDESTRIAN_ROOT, RP_PEDESTRIAN_MOTIONS, SYNBODY_PEDESTRIAN_MOTIONS
-    PEDESTRIAN_ROOT = os.path.abspath("./metaurban/assets_pedestrain/") + "/"
+    PEDESTRIAN_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets_pedestrain") + "/"
 
     @staticmethod
     def get_random_texture():
@@ -700,6 +700,11 @@ class PedestrianAssetPaths:
 
     @staticmethod
     def get_static_random_actor():
+        if PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH_NUM == 0:
+            raise RuntimeError(
+                "No pedestrian actor assets found. Expected .gltf files in: "
+                f"{PedestrianAssetPaths.PEDESTRIAN_ROOT}SynBody_actor/converted/"
+            )
         used_actor_idx = random.randint(0, PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH_NUM - 1)
         used_motion_idx = random.randint(0, PedestrianAssetPaths.BELDAM_PEDESTRIAN_MOTIONS_NUM - 1)
         static_actor = {
@@ -728,6 +733,11 @@ class PedestrianAssetPaths:
     def get_random_actor():  #(agent_type='synbody'):
         # return random.choice(list(PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH.values()))  # fps<10
 
+        if PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH_NUM == 0:
+            raise RuntimeError(
+                "No pedestrian actor assets found. Expected .gltf files in: "
+                f"{PedestrianAssetPaths.PEDESTRIAN_ROOT}SynBody_actor/converted/"
+            )
         used_actor_idx = random.randint(0, PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH_NUM - 1)
         actor = PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH[used_actor_idx]
         # del PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH[used_actor_name] ### for test, need to be dict, makesure all actors are diff
