@@ -20,7 +20,7 @@ from metaurban.engine.logger import get_logger
 from stable_baselines3 import PPO
 
 from metaurban.utils.math import panda_vector
-from panda3d.core import Point3, Vec2, LPoint3f
+from panda3d.core import Point3, Vec2, LPoint3f, LVector3
 dests = [(10.0, 14.0), (63.5, -45.0), (8.0, 14.0), (10.0, 18.0), (18.0, 18.0)]
 
 
@@ -104,6 +104,9 @@ class PGBackgroundSidewalkAssetsManager(BaseManager):
         self.end_points = None
         self.mask_delta = 2
 
+        self.idle_indices = set()
+        self.idle_positions = {}
+
         self.spawn_num = self.engine.global_config["spawn_human_num"] + \
                             self.engine.global_config["spawn_wheelchairman_num"] + \
                             self.engine.global_config['spawn_edog_num'] + self.engine.global_config['spawn_erobot_num']
@@ -135,10 +138,23 @@ class PGBackgroundSidewalkAssetsManager(BaseManager):
         # get walkable region
         self.walkable_regions_mask = self._get_walkable_regions(current_map)
 
-        # get walkable region
-        self.start_points, self.end_points = self.random_start_and_end_points(
-            self.walkable_regions_mask[:, :, 0], self.spawn_num + self.d_robot_num
-        )
+        # compute three-state split: moving / static-alone / static-group
+        import random as _rand
+        total = self.spawn_num + self.d_robot_num
+        idle_ratio = self.engine.global_config.get("idle_pedestrian_ratio", 0.0)
+        group_ratio = self.engine.global_config.get("idle_group_ratio", 0.5)
+        group_size = self.engine.global_config.get("idle_group_size", 3)
+
+        num_idle = int(total * idle_ratio)
+        num_group = int(num_idle * group_ratio)
+        num_alone = num_idle - num_group
+        num_moving = total - num_idle
+
+        self.start_points, self.end_points, self.idle_indices, self.idle_positions = \
+            self._generate_all_points(
+                self.walkable_regions_mask[:, :, 0], num_moving, num_alone, num_group, group_size
+            )
+
         time_length, points, speed, early_stop_points = get_planning(
             [self.start_points], [self.walkable_regions_mask], [self.end_points], [len(self.start_points)], 1
         )
@@ -182,9 +198,19 @@ class PGBackgroundSidewalkAssetsManager(BaseManager):
         except:
             import copy
             self.start_points = copy.deepcopy(self.end_points)
-            _, self.end_points = self.random_start_and_end_points(
-                self.walkable_regions_mask[:, :, 0], self.spawn_num + self.d_robot_num
-            )
+            total = len(self.start_points)
+            num_moving = total - len(self.idle_indices)
+            new_goals = self._random_points_new(
+                self.walkable_regions_mask[:, :, 0], num_moving
+            ) if num_moving > 0 else []
+            new_end_points = []
+            moving_goal_iter = iter(new_goals)
+            for i in range(total):
+                if i in self.idle_indices:
+                    new_end_points.append(self.start_points[i])
+                else:
+                    new_end_points.append(next(moving_goal_iter))
+            self.end_points = new_end_points
             time_length, points, speed, early_stop_points = get_planning(
                 [self.start_points], [self.walkable_regions_mask], [self.end_points], [len(self.start_points)], 1
             )
@@ -193,21 +219,40 @@ class PGBackgroundSidewalkAssetsManager(BaseManager):
             self.speeds = iter(speed[0])
             self.es_points = early_stop_points[0]
             positions, speeds = next(self.points), next(self.speeds)
-        for v, pos, speed in zip(self._traffic_humanoids, positions, speeds):
-            pos = self._to_block_coordinate(pos)  ####
+        from metaurban.component.agents.pedestrian.base_pedestrian import BasePedestrian
+        for i, (v, pos, speed) in enumerate(zip(self._traffic_humanoids, positions, speeds)):
+            speed_scaled = speed / self.engine.global_config["physics_world_step_size"]
+
+            if isinstance(v, BasePedestrian) and v.render:
+                v.set_anim_by_speed(0 if i in self.idle_indices else speed_scaled)
+
+            if i in self.idle_indices:
+                if not getattr(v, '_idle_physics_removed', False):
+                    v.dynamic_nodes.detach_from_physics_world(
+                        self.engine.physics_world.dynamic_world
+                    )
+                    v._idle_physics_removed = True
+                v.set_position(self.idle_positions[i])
+                v.origin.setP(0)
+                v.origin.setR(0)
+                continue
+
+            pos = self._to_block_coordinate(pos)
             prev_pos = v.position
-            heading = get_dest_heading(v, pos)
-            speed = speed / self.engine.global_config["physics_world_step_size"]
-            from metaurban.component.agents.pedestrian.base_pedestrian import BasePedestrian
-            if isinstance(v, BasePedestrian):
-                if v.render:
-                    v.set_anim_by_speed(speed)
             v.set_position(pos)
+
+            dx = pos[0] - prev_pos[0]
+            dy = pos[1] - prev_pos[1]
+            if dx * dx + dy * dy > 0.001:
+                heading = np.arctan2(dy, dx)
+                v.set_heading_theta(heading)
+
+            v.origin.setP(0)
+            v.origin.setR(0)
             try:
-                v._body.setAngularMovement(heading * 3)  #### TODO #larger heading
+                v._body.setAngularVelocity(LVector3(0, 0, 0))
             except:
-                heading = np.arctan2(pos[1] - prev_pos[1], pos[0] - prev_pos[0])
-                v.set_heading_theta(heading)  ### 2. change heading directly
+                pass
 
         return dict()
 
@@ -374,11 +419,95 @@ class PGBackgroundSidewalkAssetsManager(BaseManager):
         return pts
 
     def random_start_and_end_points(self, map_mask, num):
-        ### cv2.erode
         starts = self._random_points_new(map_mask, num)
         goals = self._random_points_new(map_mask, num)
-
         return starts, goals
+
+    def _generate_group_points(self, map_mask, num_group, group_size):
+        """Generate clustered points for talking groups. Returns list of (x, y) in mask coords."""
+        import random
+        from scipy.signal import convolve2d
+        h, _ = map_mask.shape
+
+        kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.uint8)
+        conv_result = convolve2d(map_mask / 255, kernel, mode='same')
+        walkable_set = set(zip(*np.where(conv_result == 8)[::-1]))
+
+        if num_group == 0:
+            return []
+
+        num_clusters = max(1, math.ceil(num_group / group_size))
+        offsets_2 = [(-3, 0), (3, 0), (0, -3), (0, 3),
+                     (-3, -1), (-3, 1), (3, -1), (3, 1),
+                     (-1, -3), (-1, 3), (1, -3), (1, 3),
+                     (-2, -2), (2, 2), (-2, 2), (2, -2)]
+        cluster_points = []
+        walkable_list = list(walkable_set)
+
+        for _ in range(num_clusters):
+            if len(cluster_points) >= num_group:
+                break
+            random.shuffle(walkable_list)
+            center = None
+            for candidate in walkable_list:
+                if all(math.dist(candidate, p) >= 8 for p in cluster_points):
+                    center = candidate
+                    break
+            if center is None:
+                center = random.choice(walkable_list)
+
+            members_needed = min(group_size, num_group - len(cluster_points))
+            cluster_points.append((center[0], h - 1 - center[1]))
+            placed = 1
+            random.shuffle(offsets_2)
+            for dx, dy in offsets_2:
+                if placed >= members_needed:
+                    break
+                nx, ny = center[0] + dx, center[1] + dy
+                if (nx, ny) in walkable_set:
+                    cluster_points.append((nx, h - 1 - ny))
+                    placed += 1
+
+        return cluster_points[:num_group]
+
+    def _generate_all_points(self, map_mask, num_moving, num_alone, num_group, group_size):
+        """Generate start/end points for all three agent categories.
+        Idle assignment is randomised across all indices so every agent type
+        has an equal chance of being idle vs moving.
+        Returns (start_points, end_points, idle_indices, idle_positions).
+        """
+        import random
+
+        total = num_moving + num_alone + num_group
+        all_starts = self._random_points_new(map_mask, total)
+
+        all_indices = list(range(total))
+        random.shuffle(all_indices)
+        idle_alone_indices = set(all_indices[:num_alone])
+        idle_group_indices = set(all_indices[num_alone:num_alone + num_group])
+        idle_indices = idle_alone_indices | idle_group_indices
+
+        group_points = self._generate_group_points(map_mask, num_group, group_size)
+        for j, idx in enumerate(sorted(idle_group_indices)):
+            if j < len(group_points):
+                all_starts[idx] = group_points[j]
+
+        moving_indices = [i for i in range(total) if i not in idle_indices]
+        moving_goals = self._random_points_new(map_mask, len(moving_indices)) if moving_indices else []
+
+        end_points = [None] * total
+        goal_iter = iter(moving_goals)
+        for i in range(total):
+            if i in idle_indices:
+                end_points[i] = all_starts[i]
+            else:
+                end_points[i] = next(goal_iter)
+
+        idle_positions = {}
+        for idx in idle_indices:
+            idle_positions[idx] = self._to_block_coordinate(np.array(all_starts[idx]))
+
+        return all_starts, end_points, idle_indices, idle_positions
 
     def _create_humanoids_once(self, map, spawn_num, max_actor_num) -> None:
         humanoid_num = 0
