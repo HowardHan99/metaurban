@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"youtube\\\\|iframe\\\\|video\\\\|youtube\\\\|embed\\\\|youtube.com\" /Users/ziyuh/Documents/metaurban --include=*.py --include=*.rst --include=*.md)"
+    ]
+  }
+}
