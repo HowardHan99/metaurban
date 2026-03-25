@@ -16,3 +16,4 @@ metaurban/assets_pedestrain
 .idea/
 bridges/ros_bridge/log/latest_build
 bridges/ros_bridge/log
+/midterm/midterm_logs

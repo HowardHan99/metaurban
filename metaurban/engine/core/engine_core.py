@@ -44,6 +44,7 @@ def _suppress_warning():
     loadPrcFileData("", "notify-level-device fatal")
     loadPrcFileData("", "notify-level-bullet fatal")
     loadPrcFileData("", "notify-level-display fatal")
+    loadPrcFileData("", "notify-level-linmath fatal")
     logging.getLogger('shapely.geos').setLevel(logging.CRITICAL)
 
 

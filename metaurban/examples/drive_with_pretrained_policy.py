@@ -205,6 +205,9 @@ if __name__ == "__main__":
         max_actor_num=20,
     )
     parser = argparse.ArgumentParser()
+    parser.add_argument("--policy", type=str, default="./pretrained_policy_576k",
+                        help="Path to PPO policy .zip (with or without .zip). "
+                             "Use your midterm best_model if pretrained is missing.")
     parser.add_argument("--observation", type=str, default="lidar", choices=["lidar", 'all'])
     parser.add_argument("--out_dir", type=str, default="saved_imgs")
     parser.add_argument("--save_img", action="store_true")
@@ -245,7 +248,19 @@ if __name__ == "__main__":
         env,
         **algo_config,
     )
-    load_path_or_dict = './pretrained_policy_576k'
+    load_path = args.policy.rstrip(".zip")
+    for p in (load_path, load_path + ".zip"):
+        if os.path.exists(p):
+            load_path_or_dict = p
+            break
+    else:
+        print("ERROR: Policy file not found.")
+        print(f"  Tried: {load_path}, {load_path}.zip")
+        print("  Options:")
+        print("    1. Use your trained model: --policy ./midterm/midterm_logs/PPO/ppo_seed0/best_model/best_model")
+        print("    2. Train one: python RL/PointNav/train_ppo.py")
+        print("    3. Check MetaUrban releases for pretrained_policy_576k.zip")
+        raise SystemExit(1)
     from stable_baselines3.common.save_util import load_from_zip_file, recursive_getattr, recursive_setattr, save_to_zip_file
     _, params, _ = load_from_zip_file(load_path_or_dict, device='cpu', load_data=False)
     expert.set_parameters(params, exact_match=True, device='cpu')
