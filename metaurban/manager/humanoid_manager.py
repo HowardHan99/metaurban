@@ -109,6 +109,7 @@ class PGBackgroundSidewalkAssetsManager(BaseManager):
 
         self.spawn_num = self.engine.global_config["spawn_human_num"] + \
                             self.engine.global_config["spawn_wheelchairman_num"] + \
+                            self.engine.global_config.get('spawn_elderly_num', 0) + \
                             self.engine.global_config['spawn_edog_num'] + self.engine.global_config['spawn_erobot_num']
         self.d_robot_num = self.engine.global_config['spawn_drobot_num']
         self.max_actor_num = self.engine.global_config["max_actor_num"]
@@ -524,6 +525,7 @@ class PGBackgroundSidewalkAssetsManager(BaseManager):
 
         agent_types = [self.random_humanoid_type] * self.engine.global_config["spawn_human_num"] + \
                         [self.random_wheelchair_type] * self.engine.global_config["spawn_wheelchairman_num"] + \
+                        [self.random_elderly_type] * self.engine.global_config.get("spawn_elderly_num", 0) + \
                         [self.random_edog_type] * self.engine.global_config['spawn_edog_num'] + \
                         [self.random_erobot_type] * self.engine.global_config['spawn_erobot_num']
 
@@ -578,6 +580,11 @@ class PGBackgroundSidewalkAssetsManager(BaseManager):
     def random_wheelchair_type(self) -> object:
         from metaurban.component.agents.pedestrian.pedestrian_type import WheelchairPedestrian
         return WheelchairPedestrian
+
+    @property
+    def random_elderly_type(self) -> object:
+        from metaurban.component.agents.pedestrian.pedestrian_type import ElderlyPedestrian
+        return ElderlyPedestrian
 
     @property
     def random_edog_type(self) -> object:

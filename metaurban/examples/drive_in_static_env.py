@@ -42,6 +42,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     config = dict(
+        log_level=20,  # Show DEBUG info for GPU detection
         crswalk_density=1,
         object_density=args.density_obj,
         walk_on_all_regions=False,

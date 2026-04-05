@@ -16,3 +16,25 @@ metaurban/assets_pedestrain
 .idea/
 bridges/ros_bridge/log/latest_build
 bridges/ros_bridge/log
+
+# Local editor settings
+.vscode/settings.json
+
+# Local runtime/debug logs
+*.log
+
+# Test and verification scripts
+verify_scene_types.py
+
+# Generated data artifacts from offline collection
+dataset/episodes/
+dataset/clips/
+tmp/
+clip_episode_*.npz
+episode_s*.npz
+
+# Local test/debug scripts
+test_gpu_panda.py
+verify_social_features.py
+monitor_gpu.sh
+documentation/SOCIAL_OFFLINE_DEV_LOG.md
