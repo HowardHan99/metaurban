@@ -76,8 +76,8 @@ python run_agent_live.py --algo sac --model_path ./midterm_logs/SAC/sac_seed0/be
 
 ```bash
 python record_video.py --algo random --episodes 3
-python record_video.py --algo ppo --model_path ./midterm_logs/PPO/ppo_seed0/best_model/best_model.zip --episodes 3
-python record_video.py --algo sac --model_path ./midterm_logs/SAC/sac_seed1/best_model/best_model.zip --episodes 3
+python record_video.py --algo ppo --model_path ./midterm_logs/PPO/ppo_seed1/best_model/best_model.zip --episodes 3
+python record_video.py --algo sac --model_path ./midterm_logs/SAC/sac_seed0/best_model/best_model.zip --episodes 4
 ```
 
 Videos are saved to `midterm_logs/videos/`.

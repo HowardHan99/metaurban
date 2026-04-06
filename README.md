@@ -242,7 +242,7 @@ For PPO training in Social Env. You can change the parameters in the file.
 #### Evaluation
 We provide a script used to evaluate the quantitative performance of the RL agent
 ```bash
-python RL/PointNav/eval_ppo.py --policy ./pretrained_policy_576k.zip
+python RL/PointNav/eval_ppo.py --policy ./!_policy_576k.zip
 ```
 As an example of evaluating the provided policy.
 

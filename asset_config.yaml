@@ -116,7 +116,7 @@ type:
       spawnnum: 0
       spawnpos: outsidewalk
     Building:
-      spawnnum: 80
+      spawnnum: 100
       spawn_long_gap: 15
       spawnpos: valid_region
       is_building: True
