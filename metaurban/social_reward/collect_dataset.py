@@ -57,7 +57,9 @@ def _build_policy(name: str, env):
 
                 def __call__(self, obs):
                     agent  = self._env.agent
-                    policy = IDMPolicy(agent, self._env.np_random)
+                    # IDMPolicy expects an integer seed (or None), not a Generator.
+                    policy_seed = getattr(self._env, "current_seed", None)
+                    policy = IDMPolicy(agent, policy_seed)
                     return policy.act("default_agent")
 
             return _IDMWrapper(env)
@@ -121,6 +123,34 @@ def parse_args(argv=None):
                    help="Mean pause duration (steps) for distracted vulnerable subtype.")
     p.add_argument("--group-ped-pair-num", type=int, default=3,
                    help="Number of group pedestrian pairs in social mode.")
+    p.add_argument("--group-cluster-num", type=int, default=0,
+                   help="Number of multi-person group clusters (0 = derive from --group-ped-pair-num).")
+    p.add_argument("--group-cluster-size-min", type=int, default=5,
+                   help="Minimum number of members per group cluster.")
+    p.add_argument("--group-cluster-size-max", type=int, default=8,
+                   help="Maximum number of members per group cluster.")
+    p.add_argument(
+        "--group-spawn-near-ego",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether to initialize group clusters around ego for easier visualization.",
+    )
+    p.add_argument("--group-spawn-min-radius", type=float, default=5.0,
+                   help="Minimum ego-centric radius for group cluster spawn (meters).")
+    p.add_argument("--group-spawn-max-radius", type=float, default=10.0,
+                   help="Maximum ego-centric radius for group cluster spawn (meters).")
+    p.add_argument(
+        "--group-release-enable",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether group clusters dissolve into normal pedestrians after a while.",
+    )
+    p.add_argument("--group-release-steps-mean", type=int, default=180,
+                   help="Mean lifetime (steps) before a cluster dissolves.")
+    p.add_argument("--group-release-steps-std", type=int, default=40,
+                   help="Std of cluster lifetime in steps.")
+    p.add_argument("--group-release-steps-min", type=int, default=60,
+                   help="Minimum lifetime in steps before release.")
     p.add_argument("--scene-type", type=str, default="commercial",
                    choices=["commercial", "commute", "leisure", "constrained"],
                    help="Scene type determines building asset pool distribution.")
@@ -132,6 +162,18 @@ def parse_args(argv=None):
                    help="Skip the sliding-window clip extraction step.")
     p.add_argument("--seed", type=int, default=None,
                    help="Base random seed (None = fully random).")
+    p.add_argument(
+        "--spawn-robot-on-sidewalk",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether to initialize ego near sidewalk pedestrians in social mode.",
+    )
+    p.add_argument(
+        "--ignore-success-done",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Keep episode running after arrive-destination to observe long-horizon social dynamics.",
+    )
     return p.parse_args(argv)
 
 
@@ -176,7 +218,19 @@ def main(argv=None):
         vulnerable_pause_prob=args.vulnerable_pause_prob,
         vulnerable_pause_steps_mean=args.vulnerable_pause_steps_mean,
         group_ped_pair_num=args.group_ped_pair_num,
+        group_cluster_num=args.group_cluster_num,
+        group_cluster_size_min=args.group_cluster_size_min,
+        group_cluster_size_max=args.group_cluster_size_max,
+        group_spawn_near_ego=args.group_spawn_near_ego,
+        group_spawn_min_radius=args.group_spawn_min_radius,
+        group_spawn_max_radius=args.group_spawn_max_radius,
+        group_release_enable=args.group_release_enable,
+        group_release_steps_mean=args.group_release_steps_mean,
+        group_release_steps_std=args.group_release_steps_std,
+        group_release_steps_min=args.group_release_steps_min,
         scene_type=args.scene_type,
+        spawn_robot_on_sidewalk=args.spawn_robot_on_sidewalk,
+        ignore_success_done=args.ignore_success_done,
     )
 
     # ------------------------------------------------------------------
