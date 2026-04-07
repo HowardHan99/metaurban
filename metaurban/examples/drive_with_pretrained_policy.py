@@ -6,6 +6,7 @@ Note: This script require rendering, please following the installation instructi
 environment that allows popping up an window.
 """
 from metaurban import SidewalkStaticMetaUrbanEnv
+from social_dynamic_env import SocialDynamicMetaUrbanEnv
 from metaurban.constants import HELP_MESSAGE
 import cv2
 import os
@@ -28,7 +29,11 @@ from stable_baselines3.common.monitor import Monitor
 
 
 def make_metadrive_env_fn(env_cfg):
-    env = SidewalkStaticMetaUrbanEnv(dict(
+    # env = SidewalkStaticMetaUrbanEnv(dict(
+    #     log_level=50,
+    #     **env_cfg,
+    # ))
+    env = SocialDynamicMetaUrbanEnv(dict(
         log_level=50,
         **env_cfg,
     ))
@@ -161,22 +166,62 @@ Fork	        WIP
 if __name__ == "__main__":
     map_type = 'X'
     den_scale = 1
+    # config = dict(
+    #     crswalk_density=1,
+    #     object_density=0.7,
+    #     use_render=True,
+    #     walk_on_all_regions=False,
+    #     map=map_type,
+    #     manual_control=False,
+    #     drivable_area_extension=55,
+    #     height_scale=1,
+    #     spawn_deliveryrobot_num=2,
+    #     show_mid_block_map=False,
+    #     show_ego_navigation=False,
+    #     debug=False,
+    #     horizon=300,
+    #     on_continuous_line_done=False,
+    #     out_of_route_done=True,
+    #     vehicle_config=dict(
+    #         show_lidar=False,
+    #         show_navi_mark=True,
+    #         show_line_to_navi_mark=False,
+    #         show_dest_mark=False,
+    #         enable_reverse=True,
+    #         policy_reverse=False,
+    #     ),
+    #     show_sidewalk=True,
+    #     show_crosswalk=True,
+    #     # scenario setting
+    #     random_spawn_lane_index=False,
+    #     num_scenarios=100,
+    #     accident_prob=0,
+    #     window_size=(1200, 900),
+    #     relax_out_of_road_done=True,
+    #     max_lateral_dist=15.0,
+    #
+    #     agent_type='wheelchair', #['coco', 'wheelchair']
+    #
+    #     spawn_human_num=int(20 * den_scale),
+    #     spawn_wheelchairman_num=int(1 * den_scale),
+    #     spawn_edog_num=int(2 * den_scale),
+    #     spawn_erobot_num=int(1 * den_scale),
+    #     spawn_drobot_num=int(1 * den_scale),
+    #     max_actor_num=20,
+    # )
     config = dict(
-        crswalk_density=1,
-        object_density=0.7,
         use_render=True,
-        walk_on_all_regions=False,
-        map=map_type,
-        manual_control=True,
-        drivable_area_extension=55,
-        height_scale=1,
-        spawn_deliveryrobot_num=2,
-        show_mid_block_map=False,
-        show_ego_navigation=False,
-        debug=False,
+        manual_control=False,
         horizon=300,
-        on_continuous_line_done=False,
-        out_of_route_done=True,
+        num_scenarios=100,
+        random_spawn_lane_index=False,
+        relax_out_of_road_done=True,
+        max_lateral_dist=15.0,
+        debug=False,
+        window_size=(1200, 900),
+
+        # agent
+        agent_type="wheelchair",
         vehicle_config=dict(
             show_lidar=False,
             show_navi_mark=True,
@@ -185,24 +230,37 @@ if __name__ == "__main__":
             enable_reverse=True,
             policy_reverse=False,
         ),
-        show_sidewalk=True,
-        show_crosswalk=True,
-        # scenario setting
-        random_spawn_lane_index=False,
-        num_scenarios=100,
-        accident_prob=0,
-        window_size=(1200, 900),
-        relax_out_of_road_done=True,
-        max_lateral_dist=15.0,
-        
-        agent_type='wheelchair', #['coco', 'wheelchair']
-        
-        spawn_human_num=int(20 * den_scale),
-        spawn_wheelchairman_num=int(1 * den_scale),
-        spawn_edog_num=int(2 * den_scale),
-        spawn_erobot_num=int(1 * den_scale),
-        spawn_drobot_num=int(1 * den_scale),
+
+        scene_type="commercial",
+        scene_building_source="scene",
+        spawn_robot_on_sidewalk=False,
+
+        crossing_ped_num=8,
+        signaling_ped_num=0,
+        vulnerable_ped_num=4,
+        spawn_elderly_num=2,
+        group_ped_pair_num=3,
+        spawn_wheelchairman_num=1,
+        spawn_edog_num=0,
+        spawn_erobot_num=0,
+        spawn_drobot_num=0,
         max_actor_num=20,
+
+        ped_ego_yield_radius=3.0,
+        crossing_assertive_radius=4.0,
+        vulnerable_yield_radius=5.0,
+        vulnerable_speed_scale=0.70,
+
+        group_spawn_near_ego=False,
+        group_spawn_min_radius=5.0,
+        group_spawn_max_radius=10.0,
+        group_cluster_num=3,
+        group_cluster_size_min=5,
+        group_cluster_size_max=8,
+
+        ignore_success_done=False,
+        object_density=1.0,
+        show_ego_navigation=False,
     )
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", type=str, default="./pretrained_policy_576k",
@@ -227,7 +285,8 @@ if __name__ == "__main__":
     if args.save_img:
         os.makedirs(args.out_dir, exist_ok=True)
 
-    env = SidewalkStaticMetaUrbanEnv(config)
+    # env = SidewalkStaticMetaUrbanEnv(config)
+    env = SocialDynamicMetaUrbanEnv(config)
     o, _ = env.reset(seed=20)
 
     algo_config = dict(
