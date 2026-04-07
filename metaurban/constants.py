@@ -706,11 +706,29 @@ class PedestrianAssetPaths:
                 f"{PedestrianAssetPaths.PEDESTRIAN_ROOT}SynBody_actor/converted/"
             )
         used_actor_idx = random.randint(0, PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH_NUM - 1)
-        used_motion_idx = random.randint(0, PedestrianAssetPaths.BELDAM_PEDESTRIAN_MOTIONS_NUM - 1)
+        actor = PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH[used_actor_idx]
+
+        if PedestrianAssetPaths.BELDAM_PEDESTRIAN_MOTIONS_NUM > 0:
+            used_motion_idx = random.randint(0, PedestrianAssetPaths.BELDAM_PEDESTRIAN_MOTIONS_NUM - 1)
+            idle_motion = PedestrianAssetPaths.BELDAM_PEDESTRIAN_MOTIONS[used_motion_idx]
+        else:
+            fallback_motion_path = actor.get('motion_path', {})
+            idle_motion = fallback_motion_path.get('idle')
+            if idle_motion is None:
+                raise RuntimeError(
+                    "No static pedestrian motions found. Expected .gltf files in either "
+                    f"{PedestrianAssetPaths.PEDESTRIAN_ROOT}motions_bedlam/converted/ "
+                    "or an 'idle' motion in the pedestrian actor batch."
+                )
+
         static_actor = {
-            'actor_path': PedestrianAssetPaths.PEDESTRIAN_ACTORS_BATCH[used_actor_idx]['actor_path'],
+            'actor_path': actor['actor_path'],
             'motion_path': {
-                'idle': PedestrianAssetPaths.BELDAM_PEDESTRIAN_MOTIONS[used_motion_idx]
+                # Static pedestrians can still request walk/run during
+                # visualization setup, so expose a full animation map.
+                'walk': idle_motion,
+                'run': idle_motion,
+                'idle': idle_motion,
             },
             'height': 0,
         }

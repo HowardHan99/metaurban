@@ -21,12 +21,12 @@ logger = logging.getLogger(__name__)
 
 SOCIAL_EXTRA_CONFIG = dict(
     # Scene type configuration
-    scene_type="commercial",  # One of: commercial, commute, leisure, constrained
-    scene_building_source="scene",  # One of: scene, default
+    scene_type="commute",  # One of: commercial, commute, leisure, constrained
+    scene_building_source="default",  # One of: scene, default
 
     # Robot spawn location configuration
     # If True, robot spawns on sidewalk; if False, robot spawns on road (default)
-    spawn_robot_on_sidewalk=False,
+    spawn_robot_on_sidewalk=True,
 
     # Core four social role counts
     crossing_ped_num=8,

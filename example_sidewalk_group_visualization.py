@@ -17,6 +17,7 @@ config = dict(
     # ===== Render and Display =====
     use_render=True,           # Open rendering window
     window_size=(960, 960),
+    manual_control=True,    # Set to True for manual keyboard control (WASD)
     
     # ===== Robot Spawn Location =====
     spawn_robot_on_sidewalk=True,  # NEW: Robot starts on sidewalk, not road
@@ -49,7 +50,8 @@ obs, info = env.reset()
 
 for step in range(config["horizon"]):
     # Random policy (can replace with your own controller)
-    action = env.action_space.sample()
+    # action = env.action_space.sample()
+    action = [0,0]  # Move forward with moderate speed, no steering
     obs, reward, terminated, truncated, info = env.step(action)
     
     if (step + 1) % 100 == 0:
