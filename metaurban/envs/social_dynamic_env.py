@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 SOCIAL_EXTRA_CONFIG = dict(
     # Scene type configuration
     scene_type="commercial",  # One of: commercial, commute, leisure, constrained
+    scene_building_source="scene",  # One of: scene, default
 
     # Robot spawn location configuration
     # If True, robot spawns on sidewalk; if False, robot spawns on road (default)
@@ -85,6 +86,11 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
 
     def _post_process_config(self, config):
         config = super()._post_process_config(config)
+
+        if config.get("scene_building_source", "scene") == "default":
+            config["scene_building_source"] = "default"
+        else:
+            config["scene_building_source"] = "scene"
 
         # If user does not explicitly choose a map sequence, use scene_type pattern.
         if config.get("map") == self.default_config_copy.get("map"):

@@ -22,6 +22,8 @@ This document describes three major new features for the MetaUrban Social Naviga
 1. **Scene Type System** - Environment Diversification
    - 4 scene types: commercial, commute, leisure, constrained
    - Automatic switching between map generation patterns and building asset pools
+    - Optional fallback to default building visuals when scene assets are not desired
+    - `env-mode default` uses the social environment with default building visuals
 
 2. **Improved Group Formation** - Natural Conversational Clustering
    - Concentric ring arrangement with member spacing of 1.35-2.45 meters
@@ -79,6 +81,27 @@ python metaurban/social_reward/collect_dataset.py \
   - `constrained/` - Constrained buildings
 
 - **Configuration manifests**: `models/scenes/{type}/manifest.json`
+
+#### Building Asset Source
+
+The building visual source is controlled by `scene_building_source`:
+
+| Value | Behavior |
+|-------|----------|
+| `scene` | Use scene-specific building GLBs from `models/scenes/{scene_type}/` |
+| `default` | Keep the original default building visuals from the base asset metadata |
+
+Example:
+
+```python
+config = dict(
+    env_mode='social',
+    scene_type='commercial',
+    scene_building_source='default',
+)
+```
+
+The CLI alias `--env-mode default` is equivalent to using the social environment with `scene_building_source='default'`.
 
 ---
 
@@ -659,6 +682,29 @@ for scene in commercial commute leisure constrained; do
 done
 ```
 
+### Verify Default Building Fallback
+
+```bash
+python metaurban/social_reward/collect_dataset.py \
+    --num-episodes 1 \
+    --env-mode social \
+    --scene-type commercial \
+    --scene-building-source default \
+    --use-render \
+    --horizon 300
+```
+
+If you prefer the alias form, use:
+
+```bash
+python metaurban/social_reward/collect_dataset.py \
+    --num-episodes 1 \
+    --env-mode default \
+    --scene-type commercial \
+    --use-render \
+    --horizon 300
+```
+
 ---
 
 ## FAQ
@@ -698,4 +744,8 @@ done
     - Group cluster centers are now filtered by sidewalk-only mask
     - Global pedestrian sidewalk-only default reverted (`pedestrian_sidewalk_only=False`)
     - Added validation command and expected runtime log pattern
+
+- **2026-04-06**: Default building fallback option
+    - Added `scene_building_source=default` to keep default building visuals
+    - Scene-specific building overwrites are skipped when fallback mode is enabled
 

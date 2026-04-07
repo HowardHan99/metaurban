@@ -423,6 +423,10 @@ class AssetManager(BaseManager):
 
     def _apply_scene_building_pool(self):
         """Rewrite building visual assets using scene-specific GLB pools."""
+        if self.engine.global_config.get("scene_building_source", "scene") == "default":
+            logger.info("AssetManager scene_building_source=default, keeping default building visuals")
+            return
+
         building_metainfo = self.type_metainfo_dict.get('Building')
         if not building_metainfo:
             return

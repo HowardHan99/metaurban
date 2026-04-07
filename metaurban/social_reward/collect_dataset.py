@@ -102,9 +102,12 @@ def parse_args(argv=None):
                    help="Static object spawn density used by sidewalk asset manager.")
     p.add_argument("--num-scenarios", type=int, default=1000,
                    help="Total number of scenarios in the environment pool.")
-    p.add_argument("--env-mode", type=str, default="social",
-                   choices=["base", "social"],
-                   help="Environment type: base=original dynamic env, social=4-role social env.")
+    p.add_argument("--env-mode", type=str, default="default",
+                   choices=["base", "social", "default"],
+                   help=(
+                       "Environment type: base=original dynamic env, social=4-role social env, "
+                       "default=social env with default building visuals."
+                   ))
     p.add_argument("--crossing-ped-num", type=int, default=8,
                    help="Number of crossing-role pedestrians in social mode.")
     p.add_argument("--signaling-ped-num", type=int, default=0,
@@ -154,6 +157,9 @@ def parse_args(argv=None):
     p.add_argument("--scene-type", type=str, default="commercial",
                    choices=["commercial", "commute", "leisure", "constrained"],
                    help="Scene type determines building asset pool distribution.")
+    p.add_argument("--scene-building-source", type=str, default="scene",
+                   choices=["scene", "default"],
+                   help="Building visual source: scene-specific pool or default metadata models.")
     p.add_argument("--spawn-human-num", type=int, default=30,
                    help="Number of pedestrians spawned per scenario.")
     p.add_argument("--horizon", type=int, default=1000,
@@ -229,16 +235,20 @@ def main(argv=None):
         group_release_steps_std=args.group_release_steps_std,
         group_release_steps_min=args.group_release_steps_min,
         scene_type=args.scene_type,
+        scene_building_source=args.scene_building_source,
         spawn_robot_on_sidewalk=args.spawn_robot_on_sidewalk,
         ignore_success_done=args.ignore_success_done,
     )
+
+    if args.env_mode == "default":
+        env_config["scene_building_source"] = "default"
 
     # ------------------------------------------------------------------
     # Instantiate environment
     # ------------------------------------------------------------------
     logger.info("Importing MetaUrban …")
     try:
-        if args.env_mode == "social":
+        if args.env_mode in ("social", "default"):
             from metaurban.envs.social_dynamic_env import SocialDynamicMetaUrbanEnv as EnvClass
         else:
             from metaurban.envs.sidewalk_dynamic_env import SidewalkDynamicMetaUrbanEnv as EnvClass
