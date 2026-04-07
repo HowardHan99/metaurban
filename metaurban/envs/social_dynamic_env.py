@@ -26,7 +26,7 @@ SOCIAL_EXTRA_CONFIG = dict(
 
     # Robot spawn location configuration
     # If True, robot spawns on sidewalk; if False, robot spawns on road (default)
-    spawn_robot_on_sidewalk=True,
+    # spawn_robot_on_sidewalk=True,
 
     # Core four social role counts
     crossing_ped_num=8,
@@ -108,81 +108,81 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
         obs, info = super().reset(seed=seed)
 
         # If enabled, move agent to sidewalk after reset
-        if self.config.get("spawn_robot_on_sidewalk", False):
-            try:
-                self._place_agent_on_sidewalk()
-            except Exception:
-                # If sidewalk placement fails, keep agent at default spawn
-                logger.exception("Failed to place ego on sidewalk; fallback to default spawn")
+        # if self.config.get("spawn_robot_on_sidewalk", False):
+        #     try:
+        #         self._place_agent_on_sidewalk()
+        #     except Exception:
+        #         # If sidewalk placement fails, keep agent at default spawn
+        #         logger.exception("Failed to place ego on sidewalk; fallback to default spawn")
 
         return obs, info
 
-    def _place_agent_on_sidewalk(self):
-        """Place the ego near pedestrian anchors, which are already on sidewalk regions."""
-        if not hasattr(self, "agent") or self.agent is None:
-            return
+    # def _place_agent_on_sidewalk(self):
+    #     """Place the ego near pedestrian anchors, which are already on sidewalk regions."""
+    #     if not hasattr(self, "agent") or self.agent is None:
+    #         return
 
-        agent = self.agent
-        if not hasattr(agent, "position"):
-            return
+    #     agent = self.agent
+    #     if not hasattr(agent, "position"):
+    #         return
 
-        try:
-            # Current ego state.
-            current_pos = agent.position
-            if len(current_pos) < 2:
-                return
+    #     try:
+    #         # Current ego state.
+    #         current_pos = agent.position
+    #         if len(current_pos) < 2:
+    #             return
 
-            # Preferred path: use humanoid start_points (always prepared at reset)
-            # since they are sampled from sidewalk walkable regions.
-            hm = getattr(self.engine, "humanoid_manager", None)
-            start_points = list(getattr(hm, "start_points", [])) if hm is not None else []
-            if hm is not None and start_points:
-                pick_idx = int(self.np_random.integers(len(start_points)))
-                anchor_world = hm._to_block_coordinate(start_points[pick_idx])
-                anchor_xy = np.array([float(anchor_world[0]), float(anchor_world[1])], dtype=float)
-                jitter = self.np_random.normal(loc=0.0, scale=0.40, size=2)
-                jitter_norm = float(np.linalg.norm(jitter))
-                if jitter_norm > 1.0:
-                    jitter = jitter / jitter_norm * 1.0
-                new_xy = anchor_xy + jitter
-                agent.set_position((float(new_xy[0]), float(new_xy[1])))
-                return
+    #         # Preferred path: use humanoid start_points (always prepared at reset)
+    #         # since they are sampled from sidewalk walkable regions.
+    #         hm = getattr(self.engine, "humanoid_manager", None)
+    #         start_points = list(getattr(hm, "start_points", [])) if hm is not None else []
+    #         if hm is not None and start_points:
+    #             pick_idx = int(self.np_random.integers(len(start_points)))
+    #             anchor_world = hm._to_block_coordinate(start_points[pick_idx])
+    #             anchor_xy = np.array([float(anchor_world[0]), float(anchor_world[1])], dtype=float)
+    #             jitter = self.np_random.normal(loc=0.0, scale=0.40, size=2)
+    #             jitter_norm = float(np.linalg.norm(jitter))
+    #             if jitter_norm > 1.0:
+    #                 jitter = jitter / jitter_norm * 1.0
+    #             new_xy = anchor_xy + jitter
+    #             agent.set_position((float(new_xy[0]), float(new_xy[1])))
+    #             return
 
-            # Secondary path: place ego close to an active pedestrian.
-            peds = list(getattr(hm, "_traffic_humanoids", [])) if hm is not None else []
-            if peds:
-                pick_idx = int(self.np_random.integers(len(peds)))
-                ped_pos = peds[pick_idx].position
-                if len(ped_pos) >= 2:
-                    ped_xy = np.array([float(ped_pos[0]), float(ped_pos[1])], dtype=float)
-                    # Small offset to avoid exact overlap at spawn.
-                    jitter = self.np_random.normal(loc=0.0, scale=0.45, size=2)
-                    jitter_norm = float(np.linalg.norm(jitter))
-                    if jitter_norm > 1.2:
-                        jitter = jitter / jitter_norm * 1.2
-                    new_xy = ped_xy + jitter
-                    agent.set_position((float(new_xy[0]), float(new_xy[1])))
-                    return
+    #         # Secondary path: place ego close to an active pedestrian.
+    #         peds = list(getattr(hm, "_traffic_humanoids", [])) if hm is not None else []
+    #         if peds:
+    #             pick_idx = int(self.np_random.integers(len(peds)))
+    #             ped_pos = peds[pick_idx].position
+    #             if len(ped_pos) >= 2:
+    #                 ped_xy = np.array([float(ped_pos[0]), float(ped_pos[1])], dtype=float)
+    #                 # Small offset to avoid exact overlap at spawn.
+    #                 jitter = self.np_random.normal(loc=0.0, scale=0.45, size=2)
+    #                 jitter_norm = float(np.linalg.norm(jitter))
+    #                 if jitter_norm > 1.2:
+    #                     jitter = jitter / jitter_norm * 1.2
+    #                 new_xy = ped_xy + jitter
+    #                 agent.set_position((float(new_xy[0]), float(new_xy[1])))
+    #                 return
 
-            # Fallback path: move ego far enough from lane center to reach sidewalk.
-            sidewalk_offset = float(self.np_random.uniform(6.5, 9.0))
-            side = int(self.np_random.choice([-1, 1]))
-            heading = float(agent.heading_theta)
-            perp_x = side * sidewalk_offset * np.sin(heading)
-            perp_y = side * sidewalk_offset * np.cos(heading)
+    #         # Fallback path: move ego far enough from lane center to reach sidewalk.
+    #         sidewalk_offset = float(self.np_random.uniform(6.5, 9.0))
+    #         side = int(self.np_random.choice([-1, 1]))
+    #         heading = float(agent.heading_theta)
+    #         perp_x = side * sidewalk_offset * np.sin(heading)
+    #         perp_y = side * sidewalk_offset * np.cos(heading)
 
-            new_x = float(current_pos[0]) + perp_x
-            new_y = float(current_pos[1]) + perp_y
-            agent.set_position((new_x, new_y))
+    #         new_x = float(current_pos[0]) + perp_x
+    #         new_y = float(current_pos[1]) + perp_y
+    #         agent.set_position((new_x, new_y))
 
-            # Rotate slightly inward towards the road.
-            if side > 0:
-                agent.set_heading_theta(heading - np.pi / 6)
-            else:
-                agent.set_heading_theta(heading + np.pi / 6)
+    #         # Rotate slightly inward towards the road.
+    #         if side > 0:
+    #             agent.set_heading_theta(heading - np.pi / 6)
+    #         else:
+    #             agent.set_heading_theta(heading + np.pi / 6)
 
-        except Exception:
-            logger.exception("Error while positioning ego on sidewalk")
+    #     except Exception:
+    #         logger.exception("Error while positioning ego on sidewalk")
 
     def setup_engine(self) -> None:
         super().setup_engine()

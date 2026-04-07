@@ -20,7 +20,7 @@ config = dict(
     manual_control=True,    # Set to True for manual keyboard control (WASD)
     
     # ===== Robot Spawn Location =====
-    spawn_robot_on_sidewalk=True,  # NEW: Robot starts on sidewalk, not road
+    # spawn_robot_on_sidewalk=True,  # NEW: Robot starts on sidewalk, not road
     
     # ===== Group Pedestrians (Chatting in Clusters) =====
     group_ped_pair_num=4,      # 4 pairs = 8 pedestrians standing together

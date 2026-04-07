@@ -5,8 +5,7 @@ Remember to press H to see help message!
 Note: This script require rendering, please following the installation instruction to setup a proper
 environment that allows popping up an window.
 """
-from metaurban import SidewalkStaticMetaUrbanEnv, SidewalkDynamicMetaUrbanEnv
-from metaurban.envs.social_dynamic_env import SocialDynamicMetaUrbanEnv
+from metaurban import SidewalkStaticMetaUrbanEnv
 from metaurban.constants import HELP_MESSAGE
 import cv2
 import os
@@ -29,11 +28,7 @@ from stable_baselines3.common.monitor import Monitor
 
 
 def make_metadrive_env_fn(env_cfg):
-    # env = SidewalkStaticMetaUrbanEnv(dict(
-    #     log_level=50,
-    #     **env_cfg,
-    # ))
-    env = SocialDynamicMetaUrbanEnv(dict( # SocialDynamicMetaUrbanEnv SidewalkDynamicMetaUrbanEnv
+    env = SidewalkStaticMetaUrbanEnv(dict(
         log_level=50,
         **env_cfg,
     ))
@@ -166,67 +161,50 @@ Fork	        WIP
 if __name__ == "__main__":
     map_type = 'X'
     den_scale = 1
-    
     config = dict(
-    # Scene type configuration
-    scene_type="commute",  # One of: commercial, commute, leisure, constrained
-    scene_building_source="default",  # One of: scene, default
-
-    # Robot spawn location configuration
-    # If True, robot spawns on sidewalk; if False, robot spawns on road (default)
-    # spawn_robot_on_sidewalk=True,
-
-    # Core four social role counts
-    crossing_ped_num=8,
-    signaling_ped_num=0,
-    vulnerable_ped_num=4,
-    spawn_elderly_num=2,
-    group_ped_pair_num=3,
-    spawn_wheelchairman_num=1,
-    spawn_edog_num=0,
-    spawn_erobot_num=0,
-    spawn_drobot_num=0,
-    max_actor_num=1,
-
-    # Behavior controls
-    ped_ego_yield_radius=3.0,
-    crossing_assertive_radius=4.0,
-    crossing_speed_scale=1.10,
-    signaling_prob=0.0,
-    signaling_steps_mean=0,
-    vulnerable_yield_radius=5.0,
-    vulnerable_speed_scale=0.70,
-    vulnerable_elderly_ratio=0.6,
-    vulnerable_distracted_ratio=0.4,
-    vulnerable_pause_prob=0.02,
-    vulnerable_pause_steps_mean=16,
-    pedestrian_sidewalk_only=False,
-    pedestrian_allow_crosswalk=False,
-
-    # Group placement controls (preview-oriented)
-    group_spawn_near_ego=False,
-    group_spawn_min_radius=5.0,
-    group_spawn_max_radius=10.0,
-    group_cluster_num=3,
-    group_cluster_size_min=5,
-    group_cluster_size_max=8,
-    group_member_radius=1.35,
-    group_member_ring_step=0.55,
-    group_cluster_min_separation=3.8,
-    group_release_enable=True,
-    group_release_steps_mean=180,
-    group_release_steps_std=40,
-    group_release_steps_min=60,
-    ignore_success_done=False,
-
-    # Required by sidewalk asset manager in this branch
-    object_density=1.0,
-    show_ego_navigation=False,
-)
+        crswalk_density=1,
+        object_density=0.7,
+        use_render=True,
+        walk_on_all_regions=False,
+        map=map_type,
+        manual_control=True,
+        drivable_area_extension=55,
+        height_scale=1,
+        spawn_deliveryrobot_num=2,
+        show_mid_block_map=False,
+        show_ego_navigation=False,
+        debug=False,
+        horizon=300,
+        on_continuous_line_done=False,
+        out_of_route_done=True,
+        vehicle_config=dict(
+            show_lidar=False,
+            show_navi_mark=True,
+            show_line_to_navi_mark=False,
+            show_dest_mark=False,
+            enable_reverse=True,
+            policy_reverse=False,
+        ),
+        show_sidewalk=True,
+        show_crosswalk=True,
+        # scenario setting
+        random_spawn_lane_index=False,
+        num_scenarios=100,
+        accident_prob=0,
+        window_size=(1200, 900),
+        relax_out_of_road_done=True,
+        max_lateral_dist=15.0,
+        
+        agent_type='wheelchair', #['coco', 'wheelchair']
+        
+        spawn_human_num=int(20 * den_scale),
+        spawn_wheelchairman_num=int(1 * den_scale),
+        spawn_edog_num=int(2 * den_scale),
+        spawn_erobot_num=int(1 * den_scale),
+        spawn_drobot_num=int(1 * den_scale),
+        max_actor_num=20,
+    )
     parser = argparse.ArgumentParser()
-    parser.add_argument("--policy", type=str, default="./pretrained_policy_576k",
-                        help="Path to PPO policy .zip (with or without .zip). "
-                             "Use your midterm best_model if pretrained is missing.")
     parser.add_argument("--observation", type=str, default="lidar", choices=["lidar", 'all'])
     parser.add_argument("--out_dir", type=str, default="saved_imgs")
     parser.add_argument("--save_img", action="store_true")
@@ -246,9 +224,8 @@ if __name__ == "__main__":
     if args.save_img:
         os.makedirs(args.out_dir, exist_ok=True)
 
-    # env = SidewalkStaticMetaUrbanEnv(config)
-    env = SocialDynamicMetaUrbanEnv(config) # SidewalkDynamicMetaUrbanEnv, SocialDynamicMetaUrbanEnv
-    o, _ = env.reset(seed=0)
+    env = SidewalkStaticMetaUrbanEnv(config)
+    o, _ = env.reset(seed=20)
 
     algo_config = dict(
         learning_rate=5e-5,
@@ -268,19 +245,7 @@ if __name__ == "__main__":
         env,
         **algo_config,
     )
-    load_path = args.policy.rstrip(".zip")
-    for p in (load_path, load_path + ".zip"):
-        if os.path.exists(p):
-            load_path_or_dict = p
-            break
-    else:
-        print("ERROR: Policy file not found.")
-        print(f"  Tried: {load_path}, {load_path}.zip")
-        print("  Options:")
-        print("    1. Use your trained model: --policy ./midterm/midterm_logs/PPO/ppo_seed0/best_model/best_model")
-        print("    2. Train one: python RL/PointNav/train_ppo.py")
-        print("    3. Check MetaUrban releases for pretrained_policy_576k.zip")
-        raise SystemExit(1)
+    load_path_or_dict = './pretrained_policy_576k'
     from stable_baselines3.common.save_util import load_from_zip_file, recursive_getattr, recursive_setattr, save_to_zip_file
     _, params, _ = load_from_zip_file(load_path_or_dict, device='cpu', load_data=False)
     expert.set_parameters(params, exact_match=True, device='cpu')
@@ -340,7 +305,7 @@ if __name__ == "__main__":
             scenario_t += 1
              
             if (tm or tc):
-                env.reset(env.current_seed + 1)
+                env.reset(env.current_seed + 10)
                 action = [0., 0.]
                 scenario_t = 0
     finally:
