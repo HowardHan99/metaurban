@@ -10,6 +10,9 @@ from __future__ import annotations
 import logging
 import numpy as np
 from metaurban.envs.sidewalk_dynamic_env import SidewalkDynamicMetaUrbanEnv
+from metaurban.component.map.pg_map import MapGenerateMethod
+from metaurban.component.map.base_map import BaseMap
+from metaurban.manager.scene_builder import SceneBuilder
 from metaurban.utils import Config
 from metaurban.constants import TerminationState
 
@@ -56,6 +59,9 @@ SOCIAL_EXTRA_CONFIG = dict(
     group_cluster_num=3,
     group_cluster_size_min=5,
     group_cluster_size_max=8,
+    group_member_radius=1.35,
+    group_member_ring_step=0.55,
+    group_cluster_min_separation=3.8,
     group_release_enable=True,
     group_release_steps_mean=180,
     group_release_steps_std=40,
@@ -77,6 +83,16 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
 
     def _post_process_config(self, config):
         config = super()._post_process_config(config)
+
+        # If user does not explicitly choose a map sequence, use scene_type pattern.
+        if config.get("map") == self.default_config_copy.get("map"):
+            scene_type = config.get("scene_type", "commercial")
+            scene_builder = SceneBuilder(scene_type=scene_type)
+            map_pattern = scene_builder.get_map_pattern()
+            config["map"] = map_pattern
+            config["map_config"][BaseMap.GENERATE_TYPE] = MapGenerateMethod.BIG_BLOCK_SEQUENCE
+            config["map_config"][BaseMap.GENERATE_CONFIG] = map_pattern
+
         return config
 
     def reset(self, seed=None):

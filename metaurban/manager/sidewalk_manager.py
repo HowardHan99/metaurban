@@ -2,9 +2,11 @@
 # Note: currently you need to change path in the init function.
 import math
 import os
+import logging
 from collections import defaultdict
 from random import sample
 from metaurban.manager.read_config import configReader
+from metaurban.manager.scene_builder import SceneBuilder
 from metaurban.component.pgblock.first_block import FirstPGBlock
 from metaurban.component.static_object.test_new_object import TestObject
 from metaurban.engine.engine_utils import get_engine
@@ -15,6 +17,9 @@ import numpy as np
 import cv2
 import json
 import random
+
+
+logger = logging.getLogger(__name__)
 
 
 def _snap_building_heading(heading, obj):
@@ -298,6 +303,7 @@ class AssetManager(BaseManager):
         super(AssetManager, self).__init__()
         self.debug = True
         self.density = self.engine.global_config['object_density']
+        self.scene_type = self.engine.global_config.get('scene_type', 'commercial')
 
         self.config = configReader()
         self.path_config = self.config.loadPath()
@@ -410,9 +416,44 @@ class AssetManager(BaseManager):
                     with open(os.path.join(root, file), 'r') as f:
                         loaded_metainfo = json.load(f)
                         self.type_metainfo_dict[loaded_metainfo['general']['detail_type']].append(loaded_metainfo)
+        self._apply_scene_building_pool()
         number = 0
         for k, v in self.type_metainfo_dict.items():
             number += len(v)
+
+    def _apply_scene_building_pool(self):
+        """Rewrite building visual assets using scene-specific GLB pools."""
+        building_metainfo = self.type_metainfo_dict.get('Building')
+        if not building_metainfo:
+            return
+
+        scene_builder = SceneBuilder(scene_type=self.scene_type)
+        scene_models = scene_builder.get_all_buildings()
+        if not scene_models:
+            return
+
+        base_seed = self.engine.global_seed
+        if base_seed is None:
+            base_seed = self.engine.global_config.get('start_seed', 0)
+        rng = np.random.default_rng(int(base_seed) + 911)
+        indices = list(range(len(scene_models)))
+
+        updated = 0
+        for obj in building_metainfo:
+            model_idx = int(rng.choice(indices))
+            model_info = scene_models[model_idx]
+            obj['filename'] = model_info['file']
+            obj['scale'] = float(model_info.get('scale', obj.get('scale', 1.0)))
+            obj['scene_asset_dir'] = f"scenes/{self.scene_type}"
+            obj['is_building'] = True
+            updated += 1
+
+        logger.info(
+            "AssetManager scene_type=%s applied %d scene building visuals from %d GLBs",
+            self.scene_type,
+            updated,
+            len(scene_models),
+        )
 
     def get_attr(self):
         """

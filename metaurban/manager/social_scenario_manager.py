@@ -61,6 +61,7 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         self._group_member_slot: Dict[int, int] = {}
         self._group_cluster_positions: Dict[int, np.ndarray] = {}
         self._group_cluster_drifts: Dict[int, np.ndarray] = {}
+        self._group_cluster_phase: Dict[int, float] = {}
         self._group_release_counter: Dict[int, int] = {}
         self._group_released: Set[int] = set()
         self._vulnerable_subtype: Dict[int, str] = {}
@@ -128,6 +129,19 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         return int(self.engine.global_config.get("group_release_steps_min", 60))
 
     @property
+    def _group_member_radius(self) -> float:
+        # Larger radius creates clearer spacing for face-to-face conversations.
+        return float(self.engine.global_config.get("group_member_radius", 1.35))
+
+    @property
+    def _group_member_ring_step(self) -> float:
+        return float(self.engine.global_config.get("group_member_ring_step", 0.55))
+
+    @property
+    def _group_cluster_min_separation(self) -> float:
+        return float(self.engine.global_config.get("group_cluster_min_separation", 3.8))
+
+    @property
     def _yield_radius(self) -> float:
         return float(self.engine.global_config.get("ped_ego_yield_radius", 3.0))
 
@@ -169,6 +183,7 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         self._roles_initialized = False
         self._group_cluster_positions.clear()
         self._group_cluster_drifts.clear()
+        self._group_cluster_phase.clear()
         self._rng = np.random.default_rng(self.engine.global_random_seed)
 
     def _assign_role(self, indices: List[int], role: str, count: int) -> List[int]:
@@ -194,6 +209,7 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         self._group_member_slot = {}
         self._group_cluster_positions = {}
         self._group_cluster_drifts = {}
+        self._group_cluster_phase = {}
         self._group_release_counter = {}
         self._group_released = set()
         self._vulnerable_subtype = {}
@@ -256,6 +272,7 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
             cluster_center = np.array([float(leader_pos[0]), float(leader_pos[1])], dtype=float)
             self._group_cluster_positions[cluster_id] = cluster_center.copy()
             self._group_cluster_drifts[cluster_id] = np.array([0.0, 0.0])
+            self._group_cluster_phase[cluster_id] = float(self._rng.uniform(0.0, 2.0 * np.pi))
             release_steps = max(
                 self._group_release_steps_min,
                 int(self._rng.normal(self._group_release_steps_mean, self._group_release_steps_std)),
@@ -274,30 +291,11 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                 if ego_obj is None:
                     raise RuntimeError("No active ego agent found")
                 ego_pos = np.array(ego_obj.position[:2], dtype=float)
-                # Prefer valid pedestrian anchors near ego so clusters stay on walkable areas.
-                candidates: List[np.ndarray] = []
-                for ped in self._traffic_humanoids:
-                    p = ped.position
-                    candidates.append(np.array([float(p[0]), float(p[1])], dtype=float))
-                candidates.sort(key=lambda p: float(np.linalg.norm(p - ego_pos)))
-
                 cluster_ids = sorted(self._group_members.keys())
-                chosen: List[np.ndarray] = []
+                placed = self._pick_cluster_center_candidates(ego_pos, cluster_ids)
                 for cluster_id in cluster_ids:
-                    picked = None
-                    for cand in candidates:
-                        d_ego = float(np.linalg.norm(cand - ego_pos))
-                        if d_ego < self._group_spawn_min_radius or d_ego > self._group_spawn_max_radius:
-                            continue
-                        if any(float(np.linalg.norm(cand - c)) < 2.5 for c in chosen):
-                            continue
-                        picked = cand
-                        break
-                    if picked is None:
-                        # Fallback to current center if no candidate in range.
-                        picked = self._group_cluster_positions.get(cluster_id, ego_pos)
-                    chosen.append(np.array(picked, dtype=float))
-                    self._group_cluster_positions[cluster_id] = np.array(picked, dtype=float)
+                    if cluster_id in placed:
+                        self._group_cluster_positions[cluster_id] = placed[cluster_id]
             except Exception:
                 logger.exception("Failed to place group clusters near ego; using default cluster positions")
 
@@ -329,15 +327,98 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
     def _group_slot_offset(self, cluster_id: int, slot: int) -> np.ndarray:
         members = self._group_members.get(cluster_id, [])
         group_size = max(1, len(members))
-        if slot <= 0 or group_size <= 1:
-            return np.array([0.25, 0.0], dtype=float)
+        if group_size <= 1:
+            return np.array([0.0, 0.0], dtype=float)
 
-        follower_count = group_size - 1
-        idx = slot - 1
-        angle = 2.0 * np.pi * (idx / max(1, follower_count))
-        ring = idx // 6
-        radius = 0.9 + 0.35 * ring
+        idx = max(0, slot)
+        inner_cap = min(6, group_size)
+        ring = idx // inner_cap
+        ring_index = idx % inner_cap
+        phase = self._group_cluster_phase.get(cluster_id, 0.0)
+
+        if ring == 0:
+            angle = 2.0 * np.pi * (ring_index / max(1, inner_cap)) + phase
+        else:
+            outer_count = max(1, group_size - inner_cap)
+            angle = 2.0 * np.pi * (ring_index / outer_count) + phase + np.pi / outer_count
+
+        radius = self._group_member_radius + self._group_member_ring_step * ring
         return np.array([np.cos(angle) * radius, np.sin(angle) * radius], dtype=float)
+
+    def _scene_anchor_templates(self, cluster_count: int) -> List[tuple]:
+        """Scene-aware (angle_deg, radius_ratio) templates for realistic social hotspots."""
+        templates = {
+            "commercial": [(-35, 0.45), (35, 0.45), (-80, 0.65), (80, 0.65), (150, 0.55), (-150, 0.55)],
+            "commute": [(-20, 0.50), (20, 0.50), (-45, 0.70), (45, 0.70), (165, 0.60), (-165, 0.60)],
+            "leisure": [(-60, 0.55), (60, 0.55), (0, 0.75), (180, 0.75), (-120, 0.45), (120, 0.45)],
+            "constrained": [(-70, 0.40), (70, 0.40), (-110, 0.55), (110, 0.55), (170, 0.50), (-170, 0.50)],
+        }
+        base = templates.get(self.scene_type, templates["commercial"])
+        out: List[tuple] = []
+        for i in range(cluster_count):
+            a_deg, r_ratio = base[i % len(base)]
+            ring = i // len(base)
+            out.append((a_deg + (8 * ring), min(0.90, r_ratio + 0.12 * ring)))
+        return out
+
+    def _pick_cluster_center_candidates(self, ego_pos: np.ndarray, cluster_ids: List[int]) -> Dict[int, np.ndarray]:
+        """Snap template anchors to legal pedestrian positions so clusters appear in realistic places."""
+        candidates: List[np.ndarray] = []
+        for ped in self._traffic_humanoids:
+            p = ped.position
+            candidates.append(np.array([float(p[0]), float(p[1])], dtype=float))
+
+        min_r = self._group_spawn_min_radius
+        max_r = self._group_spawn_max_radius
+        span = max(1e-3, max_r - min_r)
+        templates = self._scene_anchor_templates(len(cluster_ids))
+
+        available = list(candidates)
+        placed: Dict[int, np.ndarray] = {}
+        chosen: List[np.ndarray] = []
+
+        for i, cluster_id in enumerate(cluster_ids):
+            angle_deg, ratio = templates[i]
+            angle = np.deg2rad(angle_deg)
+            radius = min_r + span * float(ratio)
+            desired = ego_pos + np.array([np.cos(angle), np.sin(angle)], dtype=float) * radius
+
+            best_idx = -1
+            best_score = float("inf")
+            for j, cand in enumerate(available):
+                d_ego = float(np.linalg.norm(cand - ego_pos))
+                if d_ego < min_r or d_ego > max_r:
+                    continue
+                if any(float(np.linalg.norm(cand - c)) < self._group_cluster_min_separation for c in chosen):
+                    continue
+                score = float(np.linalg.norm(cand - desired))
+                if score < best_score:
+                    best_score = score
+                    best_idx = j
+
+            if best_idx >= 0:
+                picked = available.pop(best_idx)
+            else:
+                picked = desired
+
+            # Even in fallback mode, keep cluster centers separated.
+            min_sep = self._group_cluster_min_separation
+            for existing in chosen:
+                diff = np.array(picked, dtype=float) - existing
+                dist = float(np.linalg.norm(diff))
+                if dist >= min_sep:
+                    continue
+                if dist < 1e-5:
+                    theta = float(self._rng.uniform(0.0, 2.0 * np.pi))
+                    direction = np.array([np.cos(theta), np.sin(theta)], dtype=float)
+                else:
+                    direction = diff / dist
+                picked = existing + direction * min_sep
+
+            chosen.append(np.array(picked, dtype=float))
+            placed[cluster_id] = np.array(picked, dtype=float)
+
+        return placed
 
     def _release_cluster(self, cluster_id: int) -> None:
         if cluster_id in self._group_released:
@@ -457,7 +538,9 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                         slot = self._group_member_slot.get(idx, 0)
                         offset = self._group_slot_offset(cluster_id, slot)
                         actual_pos = cluster_center + offset
-                        target_pos = (float(actual_pos[0]), float(actual_pos[1]), 0.0)
+                        # Keep 2D target like default pedestrian pipeline so z/ground height
+                        # is resolved consistently by the engine.
+                        target_pos = (float(actual_pos[0]), float(actual_pos[1]))
 
             ped_pos = np.array(ped.position[:2])
             dist_to_ego = float(np.linalg.norm(ego_pos - ped_pos)) if ego_pos is not None else float("inf")

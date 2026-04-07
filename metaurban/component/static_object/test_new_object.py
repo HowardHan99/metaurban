@@ -78,8 +78,12 @@ class TestObject(TrafficObject):
 
         self.set_static(static_object)
         if self.render:
-            # model_file_path1 = AssetLoader.file_path("models", "test", "stop sign-8be31e33b3df4d6db7c75730ff11dfd8.glb")
-            model_file_path2 = AssetLoader.file_path("models", "test", self.filename)
+            scene_asset_dir = asset_metainfo.get("scene_asset_dir", "")
+            if scene_asset_dir:
+                parts = [p for p in scene_asset_dir.split("/") if p]
+                model_file_path2 = AssetLoader.file_path("models", *parts, self.filename)
+            else:
+                model_file_path2 = AssetLoader.file_path("models", "test", self.filename)
             model = self.loader.loadModel(model_file_path2)
             model.setH(self.hshift)
             model.setPos(self.pos0, self.pos1, self.pos2)
