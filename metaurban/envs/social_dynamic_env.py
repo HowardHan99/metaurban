@@ -51,6 +51,8 @@ SOCIAL_EXTRA_CONFIG = dict(
     vulnerable_distracted_ratio=0.4,
     vulnerable_pause_prob=0.02,
     vulnerable_pause_steps_mean=16,
+    pedestrian_sidewalk_only=False,
+    pedestrian_allow_crosswalk=False,
 
     # Group placement controls (preview-oriented)
     group_spawn_near_ego=False,

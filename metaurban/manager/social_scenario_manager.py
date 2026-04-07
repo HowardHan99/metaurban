@@ -142,6 +142,14 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         return float(self.engine.global_config.get("group_cluster_min_separation", 3.8))
 
     @property
+    def _pedestrian_sidewalk_only(self) -> bool:
+        return bool(self.engine.global_config.get("pedestrian_sidewalk_only", True))
+
+    @property
+    def _pedestrian_allow_crosswalk(self) -> bool:
+        return bool(self.engine.global_config.get("pedestrian_allow_crosswalk", False))
+
+    @property
     def _yield_radius(self) -> float:
         return float(self.engine.global_config.get("ped_ego_yield_radius", 3.0))
 
@@ -176,6 +184,45 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
     @property
     def _vulnerable_pause_steps_mean(self) -> int:
         return int(self.engine.global_config.get("vulnerable_pause_steps_mean", 16))
+
+    def _get_walkable_regions(self, current_map):
+        base_mask = super()._get_walkable_regions(current_map)
+        if not self._pedestrian_sidewalk_only:
+            return base_mask
+
+        import cv2
+
+        sidewalk_mask = np.zeros_like(base_mask)
+        region_groups = [
+            self.sidewalks,
+            self.sidewalks_near_road,
+            self.sidewalks_farfrom_road,
+            self.sidewalks_near_road_buffer,
+            self.sidewalks_farfrom_road_buffer,
+        ]
+        if self._pedestrian_allow_crosswalk:
+            region_groups.append(self.crosswalks)
+
+        for regions in region_groups:
+            for region in regions.values():
+                polygon_array = np.array(region["polygon"])
+                polygon_array += self.mask_translate
+                polygon_array = np.floor(polygon_array).astype(int)
+                polygon_array = polygon_array.reshape((-1, 1, 2))
+                cv2.fillPoly(sidewalk_mask, [polygon_array], [255, 255, 255])
+
+        sidewalk_mask = cv2.flip(sidewalk_mask, 0)
+        walkable_pixels = int(np.count_nonzero(sidewalk_mask[:, :, 0]))
+        if walkable_pixels <= 0:
+            logger.warning("Sidewalk-only mask is empty. Falling back to default walkable regions.")
+            return base_mask
+
+        logger.info(
+            "SocialScenarioManager uses sidewalk-only walkable mask (allow_crosswalk=%s, pixels=%d)",
+            self._pedestrian_allow_crosswalk,
+            walkable_pixels,
+        )
+        return sidewalk_mask
 
     def reset(self):
         super().reset()
@@ -361,12 +408,59 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
             out.append((a_deg + (8 * ring), min(0.90, r_ratio + 0.12 * ring)))
         return out
 
+    def _build_group_sidewalk_mask(self) -> Optional[np.ndarray]:
+        """Build a sidewalk-only mask for selecting group cluster centers."""
+        try:
+            import cv2
+
+            sidewalk_mask = np.zeros_like(self.walkable_regions_mask)
+            region_groups = [
+                self.sidewalks,
+                self.sidewalks_near_road,
+                self.sidewalks_farfrom_road,
+                self.sidewalks_near_road_buffer,
+                self.sidewalks_farfrom_road_buffer,
+            ]
+
+            for regions in region_groups:
+                for region in regions.values():
+                    polygon_array = np.array(region["polygon"])
+                    polygon_array += self.mask_translate
+                    polygon_array = np.floor(polygon_array).astype(int)
+                    polygon_array = polygon_array.reshape((-1, 1, 2))
+                    cv2.fillPoly(sidewalk_mask, [polygon_array], [255, 255, 255])
+
+            sidewalk_mask = cv2.flip(sidewalk_mask, 0)
+            if int(np.count_nonzero(sidewalk_mask[:, :, 0])) <= 0:
+                return None
+            return sidewalk_mask
+        except Exception:
+            logger.exception("Failed to build sidewalk-only mask for group placement")
+            return None
+
+    def _is_point_on_mask(self, xy: np.ndarray, mask: np.ndarray) -> bool:
+        """Check whether a world-coordinate point lies on a binary walkable mask."""
+        x = int(np.floor(float(xy[0]) + self.mask_translate[0]))
+        y = int(np.floor(float(xy[1]) + self.mask_translate[1]))
+        y = mask.shape[0] - 1 - y
+        if x < 0 or y < 0 or y >= mask.shape[0] or x >= mask.shape[1]:
+            return False
+        return bool(mask[y, x, 0] > 0)
+
     def _pick_cluster_center_candidates(self, ego_pos: np.ndarray, cluster_ids: List[int]) -> Dict[int, np.ndarray]:
         """Snap template anchors to legal pedestrian positions so clusters appear in realistic places."""
         candidates: List[np.ndarray] = []
         for ped in self._traffic_humanoids:
             p = ped.position
             candidates.append(np.array([float(p[0]), float(p[1])], dtype=float))
+
+        sidewalk_mask = self._build_group_sidewalk_mask()
+        if sidewalk_mask is not None:
+            sidewalk_candidates = [p for p in candidates if self._is_point_on_mask(p, sidewalk_mask)]
+            if len(sidewalk_candidates) > 0:
+                candidates = sidewalk_candidates
+            else:
+                logger.warning("No sidewalk candidate found for group placement. Fallback to default candidates.")
 
         min_r = self._group_spawn_min_radius
         max_r = self._group_spawn_max_radius
