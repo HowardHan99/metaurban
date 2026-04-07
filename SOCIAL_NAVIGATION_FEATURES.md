@@ -25,6 +25,7 @@ This document describes three major new features for the MetaUrban Social Naviga
 
 2. **Improved Group Formation** - Natural Conversational Clustering
    - Concentric ring arrangement with member spacing of 1.35-2.45 meters
+    - Group cluster center candidates are filtered to sidewalk regions
    - Automatic cluster release mechanism
 
 3. **Vulnerable Pedestrians** - Social Diversity
@@ -118,12 +119,18 @@ All members face center, forming a "chat circle"
 |-----------|---------|-------------|----------|
 | Cluster count | 3 | Number of clusters spawned simultaneously | `--group-cluster-num` |
 | Member range | 5-8 | Members per cluster | `--group-cluster-size-min/max` |
-| Member radius | 1.35m | Inner ring radius | `--group-member-radius` |
-| Ring gap | 0.55m | Outer ring spacing | `--group-member-ring-step` |
-| Cluster spacing | 3.8m | Minimum separation distance | `--group-cluster-min-separation` |
+| Member radius | 1.35m | Inner ring radius | config-only (`group_member_radius`) |
+| Ring gap | 0.55m | Outer ring spacing | config-only (`group_member_ring_step`) |
+| Cluster spacing | 3.8m | Minimum separation distance | config-only (`group_cluster_min_separation`) |
 | Release mean | 180 | Average lifespan (steps) | `--group-release-steps-mean` |
 | Release std dev | 40 | Lifespan variance | `--group-release-steps-std` |
 | Minimum lifespan | 60 | Minimum residence steps | `--group-release-steps-min` |
+
+#### Sidewalk Constraint Scope
+
+- Group cluster centers are constrained to sidewalk polygons during cluster placement.
+- Non-group pedestrians are not globally constrained by this patch and may still use the default walkable sampling behavior.
+- Current default in social config is `pedestrian_sidewalk_only=False`.
 
 #### Usage Examples
 
@@ -308,6 +315,18 @@ for cluster_id in range(target_cluster_num):
     )
 ```
 
+#### Group Center Candidate Filtering (Sidewalk-only)
+
+```python
+def _pick_cluster_center_candidates(...):
+    candidates = all_current_ped_positions()
+    sidewalk_mask = build_sidewalk_only_mask()  # sidewalks + sidewalk buffers
+    sidewalk_candidates = [p for p in candidates if is_point_on_mask(p, sidewalk_mask)]
+    if sidewalk_candidates:
+        candidates = sidewalk_candidates
+    # then continue the existing template-based placement and min-separation checks
+```
+
 #### Per-Step Execution (after_step phase)
 
 ```python
@@ -466,6 +485,10 @@ config = dict(
     group_release_steps_mean=180,   # Mean release duration
     group_release_steps_std=40,     # Release duration std dev
     group_release_steps_min=60,     # Minimum lifespan
+
+    # Walkable-region scope
+    pedestrian_sidewalk_only=False, # False by default; group center sidewalk constraint is handled separately
+    pedestrian_allow_crosswalk=False,
 )
 
 env = SocialDynamicMetaUrbanEnv(config)
@@ -565,6 +588,46 @@ python metaurban/social_reward/collect_dataset.py \
 # Expected output: Social role histogram: crossing=0 vulnerable=0 group=XX normal=YY
 ```
 
+### Verify Group Sidewalk-Center Placement
+
+```bash
+python metaurban/social_reward/collect_dataset.py \
+    --num-episodes 1 \
+    --env-mode social \
+    --scene-type commercial \
+    --map C \
+    --horizon 260 \
+    --policy random \
+    --object-density 0.05 \
+    --crossing-ped-num 0 \
+    --vulnerable-ped-num 0 \
+    --spawn-human-num 48 \
+    --group-cluster-num 4 \
+    --group-cluster-size-min 5 \
+    --group-cluster-size-max 8 \
+    --group-spawn-near-ego \
+    --group-spawn-min-radius 6 \
+    --group-spawn-max-radius 11 \
+    --group-release-enable \
+    --group-release-steps-mean 40 \
+    --group-release-steps-std 3 \
+    --group-release-steps-min 30 \
+    --ignore-success-done \
+    --use-render \
+    --out-dir /tmp/group_run_live_now
+```
+
+Recent successful log pattern:
+
+```text
+[INFO] Social role histogram: crossing=0 vulnerable=0 group=23 normal=27
+[INFO] Released group cluster 2 with 5 pedestrians
+[INFO] Released group cluster 3 with 6 pedestrians
+[INFO] Released group cluster 0 with 7 pedestrians
+[INFO] Released group cluster 1 with 5 pedestrians
+[INFO] Episode ended! Scenario Index: 710 Reason: max step
+```
+
 ### Verify Vulnerable Pedestrians
 
 ```bash
@@ -630,4 +693,9 @@ done
   - Improved group formation algorithm
   - Vulnerable pedestrian subtypes
   - Comprehensive parameter documentation
+
+- **2026-04-06**: Group-sidewalk placement scope update
+    - Group cluster centers are now filtered by sidewalk-only mask
+    - Global pedestrian sidewalk-only default reverted (`pedestrian_sidewalk_only=False`)
+    - Added validation command and expected runtime log pattern
 
