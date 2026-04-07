@@ -74,14 +74,18 @@ if __name__ == "__main__":
         random_spawn_lane_index=False,
         num_scenarios=100,
         accident_prob=0,
+        traffic_density=0,
         relax_out_of_road_done=True,
         max_lateral_dist=5.0,
         
-        spawn_human_num=int(20 * den_scale),
-        spawn_wheelchairman_num=int(1 * den_scale),
-        spawn_edog_num=int(2 * den_scale),
-        spawn_erobot_num=int(1 * den_scale),
-        spawn_drobot_num=int(1 * den_scale),
+        spawn_human_num=int(25 * den_scale),
+        idle_pedestrian_ratio=0.3,
+        idle_group_ratio=0.5,
+        idle_group_size=3,
+        spawn_wheelchairman_num=5,
+        spawn_edog_num=0,
+        spawn_erobot_num=0,
+        spawn_drobot_num=0,
         max_actor_num=20,
         
         window_size=(1200, 900),
@@ -102,6 +106,9 @@ if __name__ == "__main__":
         )
 
     env = SidewalkDynamicMetaUrbanEnv(config)
+    o, _ = env.reset(seed=30)
+
+    # Warmup: force one reset cycle so Panda3D's scene graph caches are primed
     o, _ = env.reset(seed=30)
 
     try:

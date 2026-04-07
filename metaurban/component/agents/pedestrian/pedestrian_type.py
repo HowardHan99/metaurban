@@ -279,3 +279,50 @@ class WheelchairPedestrian(BasePedestrian):
         if not hasattr(self, 'wheelchair_agent'):
             self.wheelchair_agent = AssetPaths.Pedestrian.get_wheelchair_agent()
         return 0 if 'actor_pitch' not in self.wheelchair_agent else self.wheelchair_agent['actor_pitch']
+
+
+class ElderlyPedestrian(BasePedestrian):
+    """
+    Pedestrian with a dedicated physical geometry profile.
+
+    This class introduces a smaller/slimmer collider and lower mass compared to
+    the default pedestrian, while reusing the existing pedestrian asset pool.
+    """
+
+    PARAMETER_SPACE = ParameterSpace(VehicleParameterSpace.M_VEHICLE)
+
+    # Distinct geometry/mass profile for elderly agents.
+    RADIUS = 0.30
+    MASS = 68
+
+    @property
+    def LENGTH(self):
+        return 0.90  # meters
+
+    @property
+    def HEIGHT(self):
+        return 1.55  # meters
+
+    @property
+    def WIDTH(self):
+        return 0.85  # meters
+
+    @property
+    def ACTOR_PATH(self):
+        if not hasattr(self, 'elderly_actor'):
+            # Reuse current static actor pool until a dedicated elderly asset
+            # pack is provided.
+            self.elderly_actor = AssetPaths.Pedestrian.get_static_random_actor()
+        return self.elderly_actor['actor_path']
+
+    @property
+    def MOTION_PATH(self):
+        if not hasattr(self, 'elderly_actor'):
+            self.elderly_actor = AssetPaths.Pedestrian.get_static_random_actor()
+        return self.elderly_actor['motion_path']
+
+    @property
+    def ACTOR_PITCH(self):
+        if not hasattr(self, 'elderly_actor'):
+            self.elderly_actor = AssetPaths.Pedestrian.get_static_random_actor()
+        return 0 if 'actor_pitch' not in self.elderly_actor else self.elderly_actor['actor_pitch']

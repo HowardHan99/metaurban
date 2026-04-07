@@ -36,6 +36,7 @@ METAURBAN_DEFAULT_CONFIG = dict(
     store_map=True,
     crswalk_density=0.1,  #####
     spawn_human_num=1,
+    spawn_elderly_num=0,
     show_mid_block_map=False,
     # ===== Traffic =====
     traffic_density=0.1,
