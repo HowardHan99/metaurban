@@ -249,6 +249,7 @@ if __name__ == "__main__":
     # env = SidewalkStaticMetaUrbanEnv(config)
     env = SocialDynamicMetaUrbanEnv(config) # SidewalkDynamicMetaUrbanEnv, SocialDynamicMetaUrbanEnv
     o, _ = env.reset(seed=0)
+    obs_dim = int(np.prod(np.asarray(o).shape))
 
     algo_config = dict(
         learning_rate=5e-5,
@@ -293,7 +294,7 @@ if __name__ == "__main__":
 
             o, r, tm, tc, info = env.step(action)  ### reset; get next -> empty -> have multiple end points
 
-            action = expert.predict(torch.from_numpy(o).reshape(1, 271))[0]  #.detach().numpy()
+            action = expert.predict(torch.from_numpy(o).reshape(1, obs_dim))[0]
             action = np.clip(action, a_min=-1, a_max=1.)
             action = action[0].tolist()
             
@@ -340,7 +341,8 @@ if __name__ == "__main__":
             scenario_t += 1
              
             if (tm or tc):
-                env.reset(env.current_seed + 1)
+                next_seed = ((env.current_seed + 1 - env.start_index) % env.num_scenarios) + env.start_index
+                env.reset(next_seed)
                 action = [0., 0.]
                 scenario_t = 0
     finally:

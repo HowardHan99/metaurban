@@ -2,11 +2,9 @@
 # Note: currently you need to change path in the init function.
 import math
 import os
-import logging
 from collections import defaultdict
 from random import sample
 from metaurban.manager.read_config import configReader
-from metaurban.manager.scene_builder import SceneBuilder
 from metaurban.component.pgblock.first_block import FirstPGBlock
 from metaurban.component.static_object.test_new_object import TestObject
 from metaurban.engine.engine_utils import get_engine
@@ -17,18 +15,6 @@ import numpy as np
 import cv2
 import json
 import random
-
-
-logger = logging.getLogger(__name__)
-
-
-def _snap_building_heading(heading, obj):
-    """For buildings, snap heading to nearest 90 degrees so they face the street grid."""
-    is_building = obj.get('is_building', False) or 'building' in obj.get('CLASS_NAME', '').lower()
-    if is_building:
-        half_pi = math.pi / 2
-        return round(heading / half_pi) * half_pi
-    return heading
 
 
 class GridCell:
@@ -217,43 +203,39 @@ class ObjectPlacer:
 
             return None
 
-    def _check_grid_fit(self, start_i, start_j, span_length, span_width):
+    def can_place(self, start_i, start_j, obj):
+        """
+        Check if the object can be placed starting from the given position.
+        The object is placed with additional 2-cell buffer around it.
+        Args:
+            start_i (int): The starting row index of the grid.
+            start_j (int): The starting column index of the grid.
+            obj (dict): The object to be placed, with properties like length and width.
+        Returns:
+            bool: True if the object can be placed, False otherwise.
+        """
+        # Define the size of each cell (in meters, for example)
+        cell_length = 1  # Length of each cell in meters
+        cell_width = 1  # Width of each cell in meters
+
+        # Calculate the number of cells the object spans, rounding up
+        # Note we add 2 to the span to create a buffer around the object
+        span_length = math.ceil(obj['general']['length'] / cell_length) + self.buffer
+        span_width = math.ceil(obj['general']['width'] / cell_width) + self.buffer
+        # span_length = math.ceil(obj['general']['width'] / cell_width) + 2
+        # span_width = math.ceil(obj['general']['length'] / cell_length) + 2
+
+        # Check if the object fits within the grid bounds
         if start_i + span_length > len(self.grid) or start_j + span_width > len(self.grid[0]):
             return False
+
+        # Check for any overlaps with existing objects
         for i in range(start_i, start_i + span_length):
             for j in range(start_j, start_j + span_width):
                 if self.grid[i][j].is_occupied():
                     return False
+
         return True
-
-    def can_place(self, start_i, start_j, obj):
-        """
-        Check if the object can be placed starting from the given position.
-        For buildings, also tries a rotated orientation (swapping length/width).
-        """
-        cell_length = 1
-        cell_width = 1
-
-        span_length = math.ceil(obj['general']['length'] / cell_length) + self.buffer
-        span_width = math.ceil(obj['general']['width'] / cell_width) + self.buffer
-
-        if self._check_grid_fit(start_i, start_j, span_length, span_width):
-            return True
-
-        is_building = obj.get('is_building', False) or 'building' in obj.get('CLASS_NAME', '').lower()
-        if is_building and obj['general']['length'] != obj['general']['width']:
-            rot_span_length = math.ceil(obj['general']['width'] / cell_length) + self.buffer
-            rot_span_width = math.ceil(obj['general']['length'] / cell_width) + self.buffer
-            if self._check_grid_fit(start_i, start_j, rot_span_length, rot_span_width):
-                obj['general']['length'], obj['general']['width'] = (
-                    obj['general']['width'], obj['general']['length']
-                )
-                bb = obj['general'].get('bounding_box')
-                if bb:
-                    obj['general']['bounding_box'] = [[-p[1], p[0]] for p in bb]
-                return True
-
-        return False
 
     def mark_occupied_cells(self, start_position, obj):
         """
@@ -303,7 +285,6 @@ class AssetManager(BaseManager):
         super(AssetManager, self).__init__()
         self.debug = True
         self.density = self.engine.global_config['object_density']
-        self.scene_type = self.engine.global_config.get('scene_type', 'commercial')
 
         self.config = configReader()
         self.path_config = self.config.loadPath()
@@ -416,48 +397,9 @@ class AssetManager(BaseManager):
                     with open(os.path.join(root, file), 'r') as f:
                         loaded_metainfo = json.load(f)
                         self.type_metainfo_dict[loaded_metainfo['general']['detail_type']].append(loaded_metainfo)
-        self._apply_scene_building_pool()
         number = 0
         for k, v in self.type_metainfo_dict.items():
             number += len(v)
-
-    def _apply_scene_building_pool(self):
-        """Rewrite building visual assets using scene-specific GLB pools."""
-        if self.engine.global_config.get("scene_building_source", "scene") == "default":
-            logger.info("AssetManager scene_building_source=default, keeping default building visuals")
-            return
-
-        building_metainfo = self.type_metainfo_dict.get('Building')
-        if not building_metainfo:
-            return
-
-        scene_builder = SceneBuilder(scene_type=self.scene_type)
-        scene_models = scene_builder.get_all_buildings()
-        if not scene_models:
-            return
-
-        base_seed = self.engine.global_seed
-        if base_seed is None:
-            base_seed = self.engine.global_config.get('start_seed', 0)
-        rng = np.random.default_rng(int(base_seed) + 911)
-        indices = list(range(len(scene_models)))
-
-        updated = 0
-        for obj in building_metainfo:
-            model_idx = int(rng.choice(indices))
-            model_info = scene_models[model_idx]
-            obj['filename'] = model_info['file']
-            obj['scale'] = float(model_info.get('scale', obj.get('scale', 1.0)))
-            obj['scene_asset_dir'] = f"scenes/{self.scene_type}"
-            obj['is_building'] = True
-            updated += 1
-
-        logger.info(
-            "AssetManager scene_type=%s applied %d scene building visuals from %d GLBs",
-            self.scene_type,
-            updated,
-            len(scene_models),
-        )
 
     def get_attr(self):
         """
@@ -776,9 +718,8 @@ class AssetManager(BaseManager):
                                 lane=lane,
                                 position=lane_position,
                                 static=self.engine.global_config["static_traffic_object"],
-                                heading_theta=_snap_building_heading(
-                                    lane.heading_theta_at(lane_position[0]) + obj['general'].get('heading', 0), obj
-                                ),
+                                heading_theta=lane.heading_theta_at(lane_position[0]) +
+                                obj['general'].get('heading', 0),
                                 asset_metainfo=obj
                             )
 
@@ -1115,9 +1056,8 @@ class AssetManager(BaseManager):
                                 lane=lane,
                                 position=lane_position,
                                 static=self.engine.global_config["static_traffic_object"],
-                                heading_theta=_snap_building_heading(
-                                    lane.heading_theta_at(lane_position[0]) + obj['general'].get('heading', 0), obj
-                                ),
+                                heading_theta=lane.heading_theta_at(lane_position[0]) +
+                                obj['general'].get('heading', 0),
                                 asset_metainfo=obj
                             )
 
@@ -1457,9 +1397,8 @@ class AssetManager(BaseManager):
                                 lane=lane,
                                 position=lane_position,
                                 static=self.engine.global_config["static_traffic_object"],
-                                heading_theta=_snap_building_heading(
-                                    lane.heading_theta_at(lane_position[0]) + obj['general'].get('heading', 0), obj
-                                ),
+                                heading_theta=lane.heading_theta_at(lane_position[0]) +
+                                obj['general'].get('heading', 0),
                                 asset_metainfo=obj
                             )
 
@@ -1754,9 +1693,8 @@ class AssetManager(BaseManager):
                                 lane=lane,
                                 position=lane_position,
                                 static=self.engine.global_config["static_traffic_object"],
-                                heading_theta=_snap_building_heading(
-                                    lane.heading_theta_at(lane_position[0]) + obj['general'].get('heading', 0), obj
-                                ),
+                                heading_theta=lane.heading_theta_at(lane_position[0]) +
+                                obj['general'].get('heading', 0),
                                 asset_metainfo=obj
                             )
 
@@ -1854,7 +1792,7 @@ class AssetManager(BaseManager):
                     last_object_postion_long[detail_type] = 0
         self.buffer = 2 if 'near' not in region else 0
         if obj_detail_type.lower() == 'building':
-            self.buffer = 0
+            self.buffer = 10
         # Set to keep track of tried objects
         any_object_placed = True
 
@@ -1870,64 +1808,57 @@ class AssetManager(BaseManager):
             for detail_type, object_ids in detail_type_groups.items():
                 # If we have already placed the required number of objects, skip
                 if object_counts[detail_type] < self.num_dict[detail_type]:
-                    # Try multiple random objects to find one that fits
-                    shuffled_ids = random.sample(object_ids, len(object_ids))
-                    placed_this_round = False
-                    for obj_id in shuffled_ids:
-                        obj = self.type_metainfo_dict[detail_type][obj_id[1]]
-                        interval_long = self.interval_long[detail_type]
-                        interval_lat = self.interval_lat[detail_type]
-                        random_start = self.random_gap[detail_type]
-                        if random_start:
-                            offset = np.random.randint(0, 5, 1)[0]
-                        else:
-                            offset = 0
-                        if region == 'valid_region':
-                            if object_counts[detail_type] < 1:
-                                offset = 10
-                        else:
-                            if object_counts[detail_type] < 1:
-                                offset = 10 + len(self.placed_types[region]) * 8
+                    # Randomly select an object to place
+                    obj_id = random.sample(object_ids, 1)[0]
+                    obj = self.type_metainfo_dict[detail_type][obj_id[1]]  # Retrieve the actual object
+                    interval_long = self.interval_long[detail_type]
+                    interval_lat = self.interval_lat[detail_type]
+                    random_start = self.random_gap[detail_type]
+                    if random_start:
+                        offset = np.random.randint(0, 5, 1)[0]
+                    else:
+                        offset = 0
+                    if region == 'valid_region':
+                        if object_counts[detail_type] < 1:
+                            offset = 10
+                    else:
+                        if object_counts[detail_type] < 1:
+                            offset = 10 + len(self.placed_types[region]) * 8
+                    obj['spawn_long_gap'] = interval_long
+
+                    if delta_scale is not None and region == 'valid_region':
+                        obj['spawn_long_gap'] = int(interval_long * delta_scale)
+
+                    if obj_detail_type.lower() == 'tree' and region == 'valid_region':
+                        interval_long = int(2 * 1 / self.density)
                         obj['spawn_long_gap'] = interval_long
+                        offset = 0
 
-                        if delta_scale is not None and region == 'valid_region':
-                            obj['spawn_long_gap'] = int(interval_long * delta_scale)
+                    object_placer.buffer = self.buffer
+                    obj['obj_generation_mode'] = obj_generation_mode
+                    if 'spawn_long_gap' in obj:
+                        # print('Spawning Longititude Constraint is added')
+                        if object_counts[detail_type] > 0:
+                            generated_, last_long = object_placer.place_object(
+                                obj, last_object_postion_long[detail_type] + offset
+                            )
+                            if generated_:
+                                last_object_postion_long[detail_type] = last_long
+                                object_counts[detail_type] += 1
+                                any_object_placed = True
+                        else:
+                            generated_, last_long = object_placer.place_object(
+                                obj, last_object_postion_long[detail_type] + offset
+                            )
+                            if generated_:
+                                last_object_postion_long[detail_type] = last_long
+                                object_counts[detail_type] += 1
+                                any_object_placed = True
+                    elif object_placer.place_object(obj):
+                        object_counts[detail_type] += 1
+                        any_object_placed = True
 
-                        if obj_detail_type.lower() == 'tree' and region == 'valid_region':
-                            interval_long = int(2 * 1 / self.density)
-                            obj['spawn_long_gap'] = interval_long
-                            offset = 0
-
-                        object_placer.buffer = self.buffer
-                        obj['obj_generation_mode'] = obj_generation_mode
-                        if 'spawn_long_gap' in obj:
-                            if object_counts[detail_type] > 0:
-                                generated_, last_long = object_placer.place_object(
-                                    obj, last_object_postion_long[detail_type] + offset
-                                )
-                                if generated_:
-                                    last_object_postion_long[detail_type] = last_long
-                                    object_counts[detail_type] += 1
-                                    any_object_placed = True
-                                    placed_this_round = True
-                                    break
-                            else:
-                                generated_, last_long = object_placer.place_object(
-                                    obj, last_object_postion_long[detail_type] + offset
-                                )
-                                if generated_:
-                                    last_object_postion_long[detail_type] = last_long
-                                    object_counts[detail_type] += 1
-                                    any_object_placed = True
-                                    placed_this_round = True
-                                    break
-                        elif object_placer.place_object(obj):
-                            object_counts[detail_type] += 1
-                            any_object_placed = True
-                            placed_this_round = True
-                            break
-
-                    if placed_this_round and detail_type not in self.placed_types[region]:
+                    if detail_type not in self.placed_types[region]:
                         self.placed_types[region].append(detail_type)
 
                 iteration_time += 1
@@ -2433,13 +2364,12 @@ class AssetManager(BaseManager):
             area = Polygon(polygon).area
             all_area += area
             cv2.fillPoly(walkable_regions_mask, [polygon_array], [255, 255, 255])
-        # Remove valid region for now as the 
-        # for sidewalk in self.valid_region.keys():
-        #     polygon_array = np.array(self.valid_region[sidewalk]['polygon'])
-        #     polygon_array += self.mask_translate
-        #     polygon_array = np.floor(polygon_array).astype(int)
-        #     polygon_array = polygon_array.reshape((-1, 1, 2))
-        #     cv2.fillPoly(walkable_regions_mask, [polygon_array], [255, 255, 255])
+        for sidewalk in self.valid_region.keys():
+            polygon_array = np.array(self.valid_region[sidewalk]['polygon'])
+            polygon_array += self.mask_translate
+            polygon_array = np.floor(polygon_array).astype(int)
+            polygon_array = polygon_array.reshape((-1, 1, 2))
+            cv2.fillPoly(walkable_regions_mask, [polygon_array], [255, 255, 255])
 
         obj_area_total = 0
         for polygon in self.all_object_polygons:
