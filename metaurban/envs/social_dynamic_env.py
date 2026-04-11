@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 SOCIAL_EXTRA_CONFIG = dict(
     # Scene type configuration
-    scene_type="commercial",  # One of: commercial, commute, leisure, constrained
+    scene_type="default",  # One of: default, commercial, commute, leisure, constrained
     scene_building_source="scene",  # One of: scene, default
 
     # Robot spawn location configuration
@@ -59,11 +59,18 @@ SOCIAL_EXTRA_CONFIG = dict(
     group_spawn_near_ego=False,
     group_spawn_min_radius=5.0,
     group_spawn_max_radius=10.0,
-    group_cluster_num=3,
-    group_cluster_size_min=5,
-    group_cluster_size_max=8,
-    group_member_radius=1.35,
-    group_member_ring_step=0.55,
+    group_route_min_ego_distance=8.0,
+    group_route_min_separation=5.5,
+    group_cluster_num=4,
+    group_cluster_size_min=3,
+    group_cluster_size_max=5,
+    group_member_radius=1.45,
+    group_member_ring_step=0.62,
+    group_member_radius_jitter=0.16,
+    group_member_ring_step_jitter=0.12,
+    group_member_idle_shift_prob=0.015,
+    group_member_idle_shift_steps_mean=18,
+    group_member_idle_shift_radius=0.22,
     group_cluster_min_separation=3.8,
     group_release_enable=True,
     group_release_steps_mean=180,
@@ -87,14 +94,24 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
     def _post_process_config(self, config):
         config = super()._post_process_config(config)
 
+        scene_type = str(config.get("scene_type", "default")).lower()
+        if scene_type not in ("default", "commercial", "commute", "leisure", "constrained"):
+            logger.warning("Unknown scene_type '%s'. Fallback to 'default'.", scene_type)
+            scene_type = "default"
+        config["scene_type"] = scene_type
+
         if config.get("scene_building_source", "scene") == "default":
             config["scene_building_source"] = "default"
         else:
             config["scene_building_source"] = "scene"
 
+        # Neutral scene mode: keep original map generation and default building visuals.
+        if scene_type == "default":
+            config["scene_building_source"] = "default"
+            return config
+
         # If user does not explicitly choose a map sequence, use scene_type pattern.
         if config.get("map") == self.default_config_copy.get("map"):
-            scene_type = config.get("scene_type", "commercial")
             scene_builder = SceneBuilder(scene_type=scene_type)
             map_pattern = scene_builder.get_map_pattern()
             config["map"] = map_pattern

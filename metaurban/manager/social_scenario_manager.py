@@ -38,6 +38,7 @@ ROLE_CROSSING = "crossing"
 ROLE_VULNERABLE = "vulnerable"
 ROLE_GROUP_LEADER = "group_leader"
 ROLE_GROUP_FOLLOWER = "group_follower"
+GROUP_MODE_STANDING = "standing_group"
 
 VUL_SUB_WHEELCHAIR = "wheelchair"
 VUL_SUB_ELDERLY = "elderly"
@@ -62,6 +63,13 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         self._group_cluster_positions: Dict[int, np.ndarray] = {}
         self._group_cluster_drifts: Dict[int, np.ndarray] = {}
         self._group_cluster_phase: Dict[int, float] = {}
+        self._group_cluster_member_radius: Dict[int, float] = {}
+        self._group_cluster_ring_step: Dict[int, float] = {}
+        self._group_cluster_mode: Dict[int, str] = {}
+        self._group_cluster_compression: Dict[int, float] = {}
+        self._group_member_dynamic_offset: Dict[int, np.ndarray] = {}
+        self._group_member_dynamic_timer: Dict[int, int] = {}
+        self._group_member_heading: Dict[int, float] = {}
         self._group_release_counter: Dict[int, int] = {}
         self._group_released: Set[int] = set()
         self._vulnerable_subtype: Dict[int, str] = {}
@@ -113,6 +121,14 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         return float(self.engine.global_config.get("group_spawn_max_radius", 10.0))
 
     @property
+    def _group_route_min_ego_distance(self) -> float:
+        return float(self.engine.global_config.get("group_route_min_ego_distance", 8.0))
+
+    @property
+    def _group_route_min_separation(self) -> float:
+        return float(self.engine.global_config.get("group_route_min_separation", 5.5))
+
+    @property
     def _group_release_enable(self) -> bool:
         return bool(self.engine.global_config.get("group_release_enable", True))
 
@@ -130,12 +146,31 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
 
     @property
     def _group_member_radius(self) -> float:
-        # Larger radius creates clearer spacing for face-to-face conversations.
-        return float(self.engine.global_config.get("group_member_radius", 1.35))
+        return float(self.engine.global_config.get("group_member_radius", 1.60))
 
     @property
     def _group_member_ring_step(self) -> float:
-        return float(self.engine.global_config.get("group_member_ring_step", 0.55))
+        return float(self.engine.global_config.get("group_member_ring_step", 0.75))
+
+    @property
+    def _group_member_radius_jitter(self) -> float:
+        return float(self.engine.global_config.get("group_member_radius_jitter", 0.22))
+
+    @property
+    def _group_member_ring_step_jitter(self) -> float:
+        return float(self.engine.global_config.get("group_member_ring_step_jitter", 0.18))
+
+    @property
+    def _group_member_idle_shift_prob(self) -> float:
+        return float(self.engine.global_config.get("group_member_idle_shift_prob", 0.015))
+
+    @property
+    def _group_member_idle_shift_steps_mean(self) -> int:
+        return int(self.engine.global_config.get("group_member_idle_shift_steps_mean", 18))
+
+    @property
+    def _group_member_idle_shift_radius(self) -> float:
+        return float(self.engine.global_config.get("group_member_idle_shift_radius", 0.22))
 
     @property
     def _group_cluster_min_separation(self) -> float:
@@ -231,6 +266,13 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         self._group_cluster_positions.clear()
         self._group_cluster_drifts.clear()
         self._group_cluster_phase.clear()
+        self._group_cluster_member_radius.clear()
+        self._group_cluster_ring_step.clear()
+        self._group_cluster_mode.clear()
+        self._group_cluster_compression.clear()
+        self._group_member_dynamic_offset.clear()
+        self._group_member_dynamic_timer.clear()
+        self._group_member_heading.clear()
         self._rng = np.random.default_rng(self.engine.global_random_seed)
 
     def _assign_role(self, indices: List[int], role: str, count: int) -> List[int]:
@@ -257,6 +299,13 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         self._group_cluster_positions = {}
         self._group_cluster_drifts = {}
         self._group_cluster_phase = {}
+        self._group_cluster_member_radius = {}
+        self._group_cluster_ring_step = {}
+        self._group_cluster_mode = {}
+        self._group_cluster_compression = {}
+        self._group_member_dynamic_offset = {}
+        self._group_member_dynamic_timer = {}
+        self._group_member_heading = {}
         self._group_release_counter = {}
         self._group_released = set()
         self._vulnerable_subtype = {}
@@ -315,11 +364,26 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                 self._group_member_slot[member_idx] = slot
                 self._group_partners[member_idx] = leader
 
+            for member_idx in members:
+                self._group_member_dynamic_offset[member_idx] = np.array([0.0, 0.0], dtype=float)
+                self._group_member_dynamic_timer[member_idx] = 0
+                self._group_member_heading[member_idx] = 0.0
+
             leader_pos = self._traffic_humanoids[leader].position
             cluster_center = np.array([float(leader_pos[0]), float(leader_pos[1])], dtype=float)
             self._group_cluster_positions[cluster_id] = cluster_center.copy()
             self._group_cluster_drifts[cluster_id] = np.array([0.0, 0.0])
             self._group_cluster_phase[cluster_id] = float(self._rng.uniform(0.0, 2.0 * np.pi))
+            self._group_cluster_member_radius[cluster_id] = max(
+                1.1,
+                float(self._group_member_radius + self._rng.uniform(-self._group_member_radius_jitter, self._group_member_radius_jitter)),
+            )
+            self._group_cluster_ring_step[cluster_id] = max(
+                0.4,
+                float(self._group_member_ring_step + self._rng.uniform(-self._group_member_ring_step_jitter, self._group_member_ring_step_jitter)),
+            )
+            self._group_cluster_mode[cluster_id] = GROUP_MODE_STANDING
+            self._group_cluster_compression[cluster_id] = 1.0
             release_steps = max(
                 self._group_release_steps_min,
                 int(self._rng.normal(self._group_release_steps_mean, self._group_release_steps_std)),
@@ -338,8 +402,11 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                 if ego_obj is None:
                     raise RuntimeError("No active ego agent found")
                 ego_pos = np.array(ego_obj.position[:2], dtype=float)
+                ego_path_points = self._extract_ego_global_path_points(ego_obj)
+                if ego_path_points:
+                    logger.info("Route-aware group placement using %d ego path points", len(ego_path_points))
                 cluster_ids = sorted(self._group_members.keys())
-                placed = self._pick_cluster_center_candidates(ego_pos, cluster_ids)
+                placed = self._pick_cluster_center_candidates(ego_pos, cluster_ids, ego_path_points)
                 for cluster_id in cluster_ids:
                     if cluster_id in placed:
                         self._group_cluster_positions[cluster_id] = placed[cluster_id]
@@ -389,8 +456,92 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
             outer_count = max(1, group_size - inner_cap)
             angle = 2.0 * np.pi * (ring_index / outer_count) + phase + np.pi / outer_count
 
-        radius = self._group_member_radius + self._group_member_ring_step * ring
+        member_radius = self._group_cluster_member_radius.get(cluster_id, self._group_member_radius)
+        ring_step = self._group_cluster_ring_step.get(cluster_id, self._group_member_ring_step)
+        compression = self._group_cluster_compression.get(cluster_id, 1.0)
+        member_radius *= compression
+        ring_step *= compression
+        radius = member_radius + ring_step * ring
         return np.array([np.cos(angle) * radius, np.sin(angle) * radius], dtype=float)
+
+    def _estimate_local_group_compression(self, center: np.ndarray, sidewalk_mask: Optional[np.ndarray]) -> float:
+        if sidewalk_mask is None:
+            return 1.0
+
+        dirs = [
+            np.array([1.0, 0.0]),
+            np.array([0.0, 1.0]),
+            np.array([-1.0, 0.0]),
+            np.array([0.0, -1.0]),
+            np.array([0.707, 0.707]),
+            np.array([-0.707, 0.707]),
+            np.array([-0.707, -0.707]),
+            np.array([0.707, -0.707]),
+        ]
+        probe_steps = [0.6, 1.0, 1.4, 1.8, 2.2, 2.6]
+        min_clearance = 3.0
+        for d in dirs:
+            clearance = 0.0
+            for step in probe_steps:
+                p = center + d * step
+                if not self._is_point_on_mask(p, sidewalk_mask):
+                    break
+                clearance = step
+            min_clearance = min(min_clearance, clearance)
+
+        if min_clearance < 1.0:
+            return 0.62
+        if min_clearance < 1.4:
+            return 0.72
+        if min_clearance < 1.9:
+            return 0.82
+        if min_clearance < 2.4:
+            return 0.92
+        return 1.0
+
+    def _update_group_clusters_pre_step(self, ego_pos: Optional[np.ndarray]) -> None:
+        sidewalk_mask = self._build_group_sidewalk_mask()
+        for cluster_id, center in list(self._group_cluster_positions.items()):
+            if cluster_id in self._group_released:
+                continue
+            self._group_cluster_compression[cluster_id] = self._estimate_local_group_compression(center, sidewalk_mask)
+
+    def _extract_ego_global_path_points(self, ego_obj) -> List[np.ndarray]:
+        """Extract checkpoint samples from ego's initial global route for group placement."""
+        nav = getattr(ego_obj, "navigation", None)
+        checkpoints = getattr(nav, "checkpoints", None) if nav is not None else None
+        if checkpoints is None or len(checkpoints) == 0:
+            return []
+
+        ego_pos = np.array(ego_obj.position[:2], dtype=float)
+        try:
+            heading_vec = np.array(ego_obj.heading[:2], dtype=float)
+            heading_norm = float(np.linalg.norm(heading_vec))
+            if heading_norm > 1e-6:
+                heading_vec = heading_vec / heading_norm
+            else:
+                heading_vec = None
+        except Exception:
+            heading_vec = None
+
+        min_r = max(self._group_spawn_min_radius, self._group_route_min_ego_distance)
+        max_r = self._group_spawn_max_radius
+        min_sep = max(self._group_cluster_min_separation, self._group_route_min_separation)
+        picked: List[np.ndarray] = []
+        for ckpt in checkpoints:
+            p = np.array([float(ckpt[0]), float(ckpt[1])], dtype=float)
+            vec = p - ego_pos
+            dist = float(np.linalg.norm(vec))
+            if dist < min_r or dist > max_r:
+                continue
+            if heading_vec is not None:
+                cos_forward = float(np.dot(vec / max(dist, 1e-6), heading_vec))
+                if cos_forward < -0.15:
+                    continue
+            if picked and any(float(np.linalg.norm(p - q)) < min_sep for q in picked):
+                continue
+            picked.append(p)
+        return picked
 
     def _scene_anchor_templates(self, cluster_count: int) -> List[tuple]:
         """Scene-aware (angle_deg, radius_ratio) templates for realistic social hotspots."""
@@ -447,12 +598,20 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
             return False
         return bool(mask[y, x, 0] > 0)
 
-    def _pick_cluster_center_candidates(self, ego_pos: np.ndarray, cluster_ids: List[int]) -> Dict[int, np.ndarray]:
+    def _pick_cluster_center_candidates(
+        self,
+        ego_pos: np.ndarray,
+        cluster_ids: List[int],
+        ego_path_points: Optional[List[np.ndarray]] = None,
+    ) -> Dict[int, np.ndarray]:
         """Snap template anchors to legal pedestrian positions so clusters appear in realistic places."""
         candidates: List[np.ndarray] = []
         for ped in self._traffic_humanoids:
             p = ped.position
             candidates.append(np.array([float(p[0]), float(p[1])], dtype=float))
+
+        if ego_path_points:
+            candidates.extend([np.array(p, dtype=float) for p in ego_path_points])
 
         sidewalk_mask = self._build_group_sidewalk_mask()
         if sidewalk_mask is not None:
@@ -466,16 +625,21 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         max_r = self._group_spawn_max_radius
         span = max(1e-3, max_r - min_r)
         templates = self._scene_anchor_templates(len(cluster_ids))
+        min_sep = max(self._group_cluster_min_separation, self._group_route_min_separation)
 
         available = list(candidates)
         placed: Dict[int, np.ndarray] = {}
         chosen: List[np.ndarray] = []
 
         for i, cluster_id in enumerate(cluster_ids):
-            angle_deg, ratio = templates[i]
-            angle = np.deg2rad(angle_deg)
-            radius = min_r + span * float(ratio)
-            desired = ego_pos + np.array([np.cos(angle), np.sin(angle)], dtype=float) * radius
+            if ego_path_points and len(ego_path_points) > 0:
+                path_idx = min(len(ego_path_points) - 1, int(i * max(1, len(ego_path_points)) / max(1, len(cluster_ids))))
+                desired = np.array(ego_path_points[path_idx], dtype=float)
+            else:
+                angle_deg, ratio = templates[i]
+                angle = np.deg2rad(angle_deg)
+                radius = min_r + span * float(ratio)
+                desired = ego_pos + np.array([np.cos(angle), np.sin(angle)], dtype=float) * radius
 
             best_idx = -1
             best_score = float("inf")
@@ -483,7 +647,7 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                 d_ego = float(np.linalg.norm(cand - ego_pos))
                 if d_ego < min_r or d_ego > max_r:
                     continue
-                if any(float(np.linalg.norm(cand - c)) < self._group_cluster_min_separation for c in chosen):
+                if any(float(np.linalg.norm(cand - c)) < min_sep for c in chosen):
                     continue
                 score = float(np.linalg.norm(cand - desired))
                 if score < best_score:
@@ -496,7 +660,6 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                 picked = desired
 
             # Even in fallback mode, keep cluster centers separated.
-            min_sep = self._group_cluster_min_separation
             for existing in chosen:
                 diff = np.array(picked, dtype=float) - existing
                 dist = float(np.linalg.norm(diff))
@@ -527,11 +690,46 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
             self._group_cluster_map.pop(idx, None)
             self._group_member_slot.pop(idx, None)
             self._group_partners.pop(idx, None)
+            self._group_member_dynamic_offset.pop(idx, None)
+            self._group_member_dynamic_timer.pop(idx, None)
         self._group_released.add(cluster_id)
         self._group_cluster_drifts.pop(cluster_id, None)
         self._group_cluster_positions.pop(cluster_id, None)
+        self._group_cluster_member_radius.pop(cluster_id, None)
+        self._group_cluster_ring_step.pop(cluster_id, None)
+        self._group_cluster_mode.pop(cluster_id, None)
+        self._group_cluster_compression.pop(cluster_id, None)
         self._group_release_counter.pop(cluster_id, None)
+        for idx in members:
+            self._group_member_heading.pop(idx, None)
         logger.info("Released group cluster %d with %d pedestrians", cluster_id, released_count)
+
+    def _update_group_member_dynamic_offset(self, idx: int) -> np.ndarray:
+        """Occasionally nudge grouped members for subtle realism without breaking formation."""
+        timer = self._group_member_dynamic_timer.get(idx, 0)
+        offset = self._group_member_dynamic_offset.get(idx, np.array([0.0, 0.0], dtype=float))
+        if timer > 0:
+            self._group_member_dynamic_timer[idx] = timer - 1
+            # Smoothly decay displacement near the end of a small move window.
+            if timer < 6:
+                offset = offset * 0.72
+                self._group_member_dynamic_offset[idx] = offset
+            return offset
+
+        if self._rng.random() < self._group_member_idle_shift_prob:
+            theta = float(self._rng.uniform(0.0, 2.0 * np.pi))
+            radius = float(self._rng.uniform(0.08, self._group_member_idle_shift_radius))
+            offset = np.array([np.cos(theta) * radius, np.sin(theta) * radius], dtype=float)
+            duration = max(
+                6,
+                int(self._rng.normal(self._group_member_idle_shift_steps_mean, self._group_member_idle_shift_steps_mean * 0.35)),
+            )
+            self._group_member_dynamic_offset[idx] = offset
+            self._group_member_dynamic_timer[idx] = duration
+            return offset
+
+        self._group_member_dynamic_offset[idx] = offset * 0.0
+        return self._group_member_dynamic_offset[idx]
 
     def _sample_non_wheelchair_vulnerable_subtype(self) -> str:
         elderly_w = max(0.0, self._vulnerable_elderly_ratio)
@@ -581,6 +779,12 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         if not self._roles_initialized:
             self._init_roles()
 
+        ego_pos: Optional[np.ndarray] = None
+        try:
+            ego_pos = np.array(self.engine.agent.position[:2])
+        except Exception:
+            pass
+
         if self._group_release_enable and self._group_release_counter:
             to_release: List[int] = []
             for cluster_id in list(self._group_release_counter.keys()):
@@ -589,6 +793,8 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                     to_release.append(cluster_id)
             for cluster_id in to_release:
                 self._release_cluster(cluster_id)
+
+        self._update_group_clusters_pre_step(ego_pos)
 
         try:
             positions, speeds = next(self.points), next(self.speeds)
@@ -612,12 +818,6 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
             self.es_points = early_stop_points[0]
             positions, speeds = next(self.points), next(self.speeds)
 
-        ego_pos: Optional[np.ndarray] = None
-        try:
-            ego_pos = np.array(self.engine.agent.position[:2])
-        except Exception:
-            pass
-
         for idx, (ped, raw_pos, orca_speed) in enumerate(zip(self._traffic_humanoids, positions, speeds)):
             role = self._ped_role[idx] if idx < len(self._ped_role) else ROLE_NORMAL
             target_pos = self._to_block_coordinate(raw_pos)
@@ -631,6 +831,7 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                     if cluster_center is not None:
                         slot = self._group_member_slot.get(idx, 0)
                         offset = self._group_slot_offset(cluster_id, slot)
+                        offset = offset + self._update_group_member_dynamic_offset(idx)
                         actual_pos = cluster_center + offset
                         # Keep 2D target like default pedestrian pipeline so z/ground height
                         # is resolved consistently by the engine.
@@ -674,16 +875,41 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                 if dist_to_ego < self._crossing_assertive_radius:
                     speed_scale *= 1.1
 
-            prev_pos = ped.position
             if role in (ROLE_GROUP_LEADER, ROLE_GROUP_FOLLOWER):
                 cluster_id = self._group_cluster_map.get(idx, None)
                 center = self._group_cluster_positions.get(cluster_id) if cluster_id is not None else None
-                if center is not None:
-                    heading = np.arctan2(center[1] - prev_pos[1], center[0] - prev_pos[0])
-                else:
-                    heading = get_dest_heading(ped, target_pos)
+                if center is not None and cluster_id not in self._group_released:
+                    member_pos = np.array([float(target_pos[0]), float(target_pos[1])], dtype=float)
+                    slot = self._group_member_slot.get(idx, 0)
+                    static_pos = center + self._group_slot_offset(cluster_id, slot)
+                    inward = center - static_pos
+                    inward_norm = float(np.linalg.norm(inward))
+                    if inward_norm > 1e-6:
+                        target_heading = float(np.arctan2(inward[1], inward[0]))
+                    else:
+                        target_heading = float(ped.heading_theta)
+
+                    prev_heading = float(self._group_member_heading.get(idx, target_heading))
+                    delta = float(np.arctan2(np.sin(target_heading - prev_heading), np.cos(target_heading - prev_heading)))
+                    heading_rad = prev_heading + 0.25 * delta
+                    self._group_member_heading[idx] = heading_rad
+
+                    from metaurban.component.agents.pedestrian.base_pedestrian import BasePedestrian
+                    if isinstance(ped, BasePedestrian) and ped.render:
+                        dynamic_mag = float(np.linalg.norm(self._group_member_dynamic_offset.get(idx, np.zeros(2))))
+                        ped.set_anim_by_speed(0.20 if dynamic_mag > 1e-3 else 0.0)
+
+                    ped.set_position(target_pos)
+                    ped.set_heading_theta(heading_rad)
+                    try:
+                        ped._body.setAngularVelocity((0.0, 0.0, 0.0))
+                    except Exception:
+                        pass
+                    continue
+                heading = get_dest_heading(ped, target_pos)
             else:
                 heading = get_dest_heading(ped, target_pos)
+            prev_pos = ped.position
             speed_val = (
                 orca_speed / self.engine.global_config["physics_world_step_size"]
             ) * speed_scale
