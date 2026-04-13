@@ -126,12 +126,26 @@ def parse_args(argv=None):
                    help="Mean pause duration (steps) for distracted vulnerable subtype.")
     p.add_argument("--group-ped-pair-num", type=int, default=3,
                    help="Number of group pedestrian pairs in social mode.")
-    p.add_argument("--group-cluster-num", type=int, default=0,
+    p.add_argument("--group-cluster-num", type=int, default=4,
                    help="Number of multi-person group clusters (0 = derive from --group-ped-pair-num).")
-    p.add_argument("--group-cluster-size-min", type=int, default=5,
+    p.add_argument("--group-cluster-size-min", type=int, default=3,
                    help="Minimum number of members per group cluster.")
-    p.add_argument("--group-cluster-size-max", type=int, default=8,
+    p.add_argument("--group-cluster-size-max", type=int, default=5,
                    help="Maximum number of members per group cluster.")
+    p.add_argument("--group-member-radius", type=float, default=1.45,
+                   help="Base member radius (meters) for group conversation circles.")
+    p.add_argument("--group-member-ring-step", type=float, default=0.62,
+                   help="Ring spacing step (meters) for multi-ring group clusters.")
+    p.add_argument("--group-member-radius-jitter", type=float, default=0.16,
+                   help="Per-cluster random jitter applied to member radius.")
+    p.add_argument("--group-member-ring-step-jitter", type=float, default=0.12,
+                   help="Per-cluster random jitter applied to ring step spacing.")
+    p.add_argument("--group-member-idle-shift-prob", type=float, default=0.015,
+                   help="Per-step probability for a grouped member to make a subtle local move.")
+    p.add_argument("--group-member-idle-shift-steps-mean", type=int, default=18,
+                   help="Mean steps for each subtle grouped-member local move.")
+    p.add_argument("--group-member-idle-shift-radius", type=float, default=0.22,
+                   help="Maximum radius of subtle grouped-member local moves (meters).")
     p.add_argument(
         "--group-spawn-near-ego",
         action=argparse.BooleanOptionalAction,
@@ -142,6 +156,10 @@ def parse_args(argv=None):
                    help="Minimum ego-centric radius for group cluster spawn (meters).")
     p.add_argument("--group-spawn-max-radius", type=float, default=10.0,
                    help="Maximum ego-centric radius for group cluster spawn (meters).")
+    p.add_argument("--group-route-min-ego-distance", type=float, default=8.0,
+                   help="Minimum ego distance when using route-aware group placement (meters).")
+    p.add_argument("--group-route-min-separation", type=float, default=5.5,
+                   help="Minimum separation between clusters along route-aware placement (meters).")
     p.add_argument(
         "--group-release-enable",
         action=argparse.BooleanOptionalAction,
@@ -154,8 +172,8 @@ def parse_args(argv=None):
                    help="Std of cluster lifetime in steps.")
     p.add_argument("--group-release-steps-min", type=int, default=60,
                    help="Minimum lifetime in steps before release.")
-    p.add_argument("--scene-type", type=str, default="commercial",
-                   choices=["commercial", "commute", "leisure", "constrained"],
+    p.add_argument("--scene-type", type=str, default="default",
+                   choices=["default", "commercial", "commute", "leisure", "constrained"],
                    help="Scene type determines building asset pool distribution.")
     p.add_argument("--scene-building-source", type=str, default="scene",
                    choices=["scene", "default"],
@@ -227,9 +245,18 @@ def main(argv=None):
         group_cluster_num=args.group_cluster_num,
         group_cluster_size_min=args.group_cluster_size_min,
         group_cluster_size_max=args.group_cluster_size_max,
+        group_member_radius=args.group_member_radius,
+        group_member_ring_step=args.group_member_ring_step,
+        group_member_radius_jitter=args.group_member_radius_jitter,
+        group_member_ring_step_jitter=args.group_member_ring_step_jitter,
+        group_member_idle_shift_prob=args.group_member_idle_shift_prob,
+        group_member_idle_shift_steps_mean=args.group_member_idle_shift_steps_mean,
+        group_member_idle_shift_radius=args.group_member_idle_shift_radius,
         group_spawn_near_ego=args.group_spawn_near_ego,
         group_spawn_min_radius=args.group_spawn_min_radius,
         group_spawn_max_radius=args.group_spawn_max_radius,
+        group_route_min_ego_distance=args.group_route_min_ego_distance,
+        group_route_min_separation=args.group_route_min_separation,
         group_release_enable=args.group_release_enable,
         group_release_steps_mean=args.group_release_steps_mean,
         group_release_steps_std=args.group_release_steps_std,
@@ -241,6 +268,7 @@ def main(argv=None):
     )
 
     if args.env_mode == "default":
+        env_config["scene_type"] = "default"
         env_config["scene_building_source"] = "default"
 
     # ------------------------------------------------------------------

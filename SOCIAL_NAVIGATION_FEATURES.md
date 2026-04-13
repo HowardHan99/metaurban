@@ -26,8 +26,10 @@ This document describes three major new features for the MetaUrban Social Naviga
     - `env-mode default` uses the social environment with default building visuals
 
 2. **Improved Group Formation** - Natural Conversational Clustering
-   - Concentric ring arrangement with member spacing of 1.35-2.45 meters
+    - Standing-only conversational clusters (no moving-group mode)
+    - Concentric ring arrangement with member spacing controlled by radius/ring-step
     - Group cluster center candidates are filtered to sidewalk regions
+    - Route-aware near-ego placement and automatic timed release
    - Automatic cluster release mechanism
 
 3. **Vulnerable Pedestrians** - Social Diversity
@@ -107,12 +109,20 @@ The CLI alias `--env-mode default` is equivalent to using the social environment
 
 ### Feature 2: Improved Group Formation
 
+#### Current Behavior (env_change branch)
+
+- Group clusters are **standing-only** during clustering phase.
+- Cluster centers are static after initialization.
+- Members keep a conversation ring formation and only do subtle local idle shifts.
+- Members face inward with heading smoothing to reduce visual wobble.
+- After release timer expires, members convert to `normal` and rejoin regular ORCA movement.
+
 #### Group Lifecycle
 
 ```
-Initialization Phase (typically 5-8 members per cluster)
+Initialization Phase (typically 3-5 members per cluster)
      ↓
-Clustering Phase (residing in formation, default 180±40 steps)
+Clustering Phase (standing in formation, default 180±40 steps)
      ↓
 Release Phase (gradually converting to normal pedestrians, independent walking)
      ↓
@@ -125,10 +135,10 @@ Completion Phase (dispersing to individual destinations)
              ← Phase offset: each cluster has different orientation
          Inner Circle (≤6 members)
           •  •
-         •    •    ← Radius 1.35m
+           •    •    ← Radius 1.45m (default)
           •  •
 
-   Outer Circles (7-12 members)   ← Radius 1.35 + 0.55 = 1.9m
+       Outer Circles (if cluster is larger)   ← Radius = member_radius + ring_step * ring
   •   •      •  •
  •       •        •
   •  •       •  •
@@ -140,11 +150,15 @@ All members face center, forming a "chat circle"
 
 | Parameter | Default | Description | CLI Flag |
 |-----------|---------|-------------|----------|
-| Cluster count | 3 | Number of clusters spawned simultaneously | `--group-cluster-num` |
-| Member range | 5-8 | Members per cluster | `--group-cluster-size-min/max` |
-| Member radius | 1.35m | Inner ring radius | config-only (`group_member_radius`) |
-| Ring gap | 0.55m | Outer ring spacing | config-only (`group_member_ring_step`) |
+| Cluster count | 4 | Number of clusters spawned simultaneously | `--group-cluster-num` |
+| Member range | 3-5 | Members per cluster | `--group-cluster-size-min/max` |
+| Member radius | 1.45m | Inner ring radius | `--group-member-radius` |
+| Ring gap | 0.62m | Outer ring spacing | `--group-member-ring-step` |
 | Cluster spacing | 3.8m | Minimum separation distance | config-only (`group_cluster_min_separation`) |
+| Route min ego distance | 8.0m | Keep clusters away from ego route start | `--group-route-min-ego-distance` |
+| Route min separation | 5.5m | Extra cluster-to-cluster spacing in route-aware placement | `--group-route-min-separation` |
+| Idle shift prob | 0.015 | Subtle local movement probability | `--group-member-idle-shift-prob` |
+| Idle shift radius | 0.22m | Max local movement radius | `--group-member-idle-shift-radius` |
 | Release mean | 180 | Average lifespan (steps) | `--group-release-steps-mean` |
 | Release std dev | 40 | Lifespan variance | `--group-release-steps-std` |
 | Minimum lifespan | 60 | Minimum residence steps | `--group-release-steps-min` |
@@ -158,13 +172,15 @@ All members face center, forming a "chat circle"
 #### Usage Examples
 
 ```bash
-# Create 3 clusters with 7 members each, release after ~150 steps
+# Create 4 standing clusters with 3-5 members each, release after ~150 steps
 python metaurban/social_reward/collect_dataset.py \
   --env-mode social \
-  --scene-type commercial \
-  --group-cluster-num 3 \
-  --group-cluster-size-min 7 \
-  --group-cluster-size-max 7 \
+    --scene-type default \
+    --group-cluster-num 4 \
+    --group-cluster-size-min 3 \
+    --group-cluster-size-max 5 \
+    --group-member-radius 1.45 \
+    --group-member-ring-step 0.62 \
   --group-release-steps-mean 150 \
   --group-release-steps-std 30 \
   --use-render \
@@ -173,19 +189,22 @@ python metaurban/social_reward/collect_dataset.py \
 # Spawn near ego for easier visualization
 python metaurban/social_reward/collect_dataset.py \
   --env-mode social \
+    --scene-type default \
   --group-spawn-near-ego \
-  --group-spawn-min-radius 5 \
-  --group-spawn-max-radius 10 \
+    --group-spawn-min-radius 6 \
+    --group-spawn-max-radius 11 \
+    --group-route-min-ego-distance 8 \
+    --group-route-min-separation 5.5 \
   --num-episodes 5 \
   --use-render
 ```
 
 #### Log Output Example
 
-```
-[INFO] Social role histogram: crossing=0 vulnerable=0 group=22 normal=20
-[INFO] Released group cluster 0 with 6 pedestrians
-[INFO] Released group cluster 1 with 8 pedestrians
+```text
+[INFO] Social role histogram: crossing=6 vulnerable=8 group=26 normal=2
+[INFO] Released group cluster 3 with 4 pedestrians
+[INFO] Released group cluster 5 with 5 pedestrians
 ```
 
 ---
@@ -321,7 +340,7 @@ target_cluster_num = min(
 
 # Step 2: Create clusters
 for cluster_id in range(target_cluster_num):
-    # Randomly select 5-8 members
+    # Randomly select 3-5 members
     cluster_size = random(size_min, size_max)
     members = select_random_pedestrians(cluster_size)
     
@@ -332,6 +351,7 @@ for cluster_id in range(target_cluster_num):
     # Initialize cluster attributes
     cluster_center = leader_position
     cluster_phase = random(0, 2π)  # Random orientation offset
+    cluster_mode = standing_group
     release_counter = max(
         min_steps,
         round(normal(mean_steps, std_steps))
@@ -370,8 +390,13 @@ for member_idx in traffic_humanoids:
         # Calculate concentric ring position
         slot = group_member_slot[member_idx]
         offset = calculate_ring_offset(cluster_id, slot)
+        offset += subtle_idle_shift(member_idx)
         actual_pos = cluster_center + offset
         target_pos = actual_pos
+
+        # Face inward with heading smoothing
+        target_heading = inward_heading(cluster_center, member_slot_static_pos)
+        heading = smooth(previous_heading, target_heading)
     else:
         # Non-group members use global ORCA trajectory
         target_pos = global_trajectory[member_idx]
@@ -491,11 +516,14 @@ config = dict(
     vulnerable_pause_prob=0.02,     # Pause probability per step
     vulnerable_pause_steps_mean=16, # Mean pause duration
     
-    # Group formation parameters
-    group_cluster_size_min=5,       # Minimum cluster size
-    group_cluster_size_max=8,       # Maximum cluster size
-    group_member_radius=1.35,       # Inner ring radius
-    group_member_ring_step=0.55,    # Outer ring spacing
+    # Group formation parameters (standing-only clusters)
+    group_cluster_size_min=3,       # Minimum cluster size
+    group_cluster_size_max=5,       # Maximum cluster size
+    group_member_radius=1.45,       # Inner ring radius
+    group_member_ring_step=0.62,    # Outer ring spacing
+    group_member_idle_shift_prob=0.015,
+    group_member_idle_shift_steps_mean=18,
+    group_member_idle_shift_radius=0.22,
     group_cluster_min_separation=3.8, # Minimum cluster separation
     
     # Group spawn location
@@ -540,8 +568,10 @@ python metaurban/social_reward/collect_dataset.py \
   
   # Group parameters
   --group-cluster-num 3 \
-  --group-cluster-size-min 5 \
-  --group-cluster-size-max 8 \
+    --group-cluster-size-min 3 \
+    --group-cluster-size-max 5 \
+    --group-member-radius 1.45 \
+    --group-member-ring-step 0.62 \
   --group-spawn-near-ego \
   --group-spawn-min-radius 5 \
   --group-spawn-max-radius 10 \
@@ -577,11 +607,12 @@ python metaurban/social_reward/collect_dataset.py \
 |--------|------|---------|
 | `_post_process_config()` | social_dynamic_env.py#L85 | Scene type → map pattern routing |
 | `_apply_scene_building_pool()` | sidewalk_manager.py#L420 | Load scene-specific building GLBs |
-| `_init_roles()` | social_scenario_manager.py#L199 | Role assignment and group initialization |
-| `_group_slot_offset()` | social_scenario_manager.py#L320 | Calculate group member concentric ring positions |
-| `_init_vulnerable_profiles()` | social_scenario_manager.py#L451 | Vulnerable pedestrian subtype assignment |
-| `_release_cluster()` | social_scenario_manager.py#L422 | Cluster dissolution |
-| `after_step()` | social_scenario_manager.py#L472 | Per-step group and vulnerable behavior updates |
+| `_init_roles()` | social_scenario_manager.py | Role assignment and standing-cluster initialization |
+| `_pick_cluster_center_candidates()` | social_scenario_manager.py | Route-aware and sidewalk-filtered center placement |
+| `_group_slot_offset()` | social_scenario_manager.py | Calculate group member concentric ring positions |
+| `_update_group_member_dynamic_offset()` | social_scenario_manager.py | Subtle standing-member idle movement |
+| `_release_cluster()` | social_scenario_manager.py | Cluster dissolution to normal pedestrians |
+| `after_step()` | social_scenario_manager.py | Per-step group/vulnerable behavior updates |
 
 ### Asset Files
 
@@ -710,7 +741,7 @@ python metaurban/social_reward/collect_dataset.py \
 ## FAQ
 
 ### Q: Why aren't group members moving?
-**A:** This is by design. Group members maintain their formation until release, then move independently. Check the values of `group_release_enable` and `group_release_steps_mean`.
+**A:** This is by design on current `env_change`: group clusters are standing-only during cluster phase. Members keep formation (with slight idle shifts) until release, then move independently as `normal` pedestrians.
 
 ### Q: Why is vulnerable pedestrian speed so slow?
 **A:** Vulnerable pedestrians are intentionally designed to move slowly, mimicking reduced mobility. Speed ranges are determined by the `speed_scale` of each subtype (0.45-0.95x).
@@ -748,4 +779,9 @@ python metaurban/social_reward/collect_dataset.py \
 - **2026-04-06**: Default building fallback option
     - Added `scene_building_source=default` to keep default building visuals
     - Scene-specific building overwrites are skipped when fallback mode is enabled
+
+- **2026-04-12**: Group behavior aligned to standing-only clusters
+    - Removed moving-group behavior from runtime logic
+    - Updated defaults to 3-5 members per cluster and 4 clusters
+    - Added route-aware/sidewalk-filtered placement notes and idle-shift details
 
