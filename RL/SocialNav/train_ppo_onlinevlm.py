@@ -1,6 +1,5 @@
 import argparse
 import os
-from functools import partial
 
 from stable_baselines3.ppo.ppo import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -218,7 +217,14 @@ def make_metaurban_env_fn(env_cfg, seed):
                 **env_cfg,
             )
         )
-        env = Monitor(env)
+        env = Monitor(
+            env,
+            info_keywords=(
+                "episode_env_reward",
+                "episode_vlm_reward",
+                "episode_total_reward",
+            ),
+        )
         return env
     return _thunk
 
@@ -272,6 +278,7 @@ def train():
         total_timesteps=args.total_timesteps,
         callback=callbacks,
         reset_num_timesteps=False,
+        tb_log_name=f"metaurban_social_nav_{exptid}",
     )
 
     save_path = f"./RL_logs/PPO/metaurban_social_nav_{exptid}_final"

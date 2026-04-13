@@ -84,11 +84,24 @@ SOCIAL_EXTRA_CONFIG = dict(
 
 
 class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
+    def __init__(self, config=None):
+        super().__init__(config)
+        self._init_reward_trackers()
+        self._logged_reward_split_fallback = False
+
     @classmethod
     def default_config(cls) -> Config:
         config = super().default_config()
         config.update(SOCIAL_EXTRA_CONFIG)
         return config
+
+    def _init_reward_trackers(self):
+        self._episode_env_reward = 0.0
+        self._episode_vlm_reward = 0.0
+        self._episode_total_reward = 0.0
+        self._last_env_reward = 0.0
+        self._last_vlm_reward = 0.0
+        self._last_total_reward = 0.0
 
     def _post_process_config(self, config):
         config = super()._post_process_config(config)
@@ -118,6 +131,7 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
         return config
 
     def reset(self, seed=None):
+        self._init_reward_trackers()
         obs, info = super().reset(seed=seed)
 
         if self.config.get("spawn_robot_on_sidewalk", False):
@@ -127,6 +141,127 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
                 logger.exception("Failed to place ego on sidewalk; fallback to default spawn")
 
         return obs, info
+
+    def _coerce_step_result(self, step_result):
+        if len(step_result) == 5:
+            obs, reward, terminated, truncated, info = step_result
+        elif len(step_result) == 4:
+            obs, reward, done, info = step_result
+            terminated = bool(done)
+            truncated = False
+        else:
+            raise ValueError(f"Unexpected step result length: {len(step_result)}")
+        return obs, reward, terminated, truncated, info
+
+    def _extract_reward_split(self, total_reward: float, info: dict):
+        """
+        Best-effort reward split.
+
+        Priority:
+        1. Reuse explicit keys if parent env already exposes them.
+        2. Reconstruct from known weighted/raw VLM keys.
+        3. Fall back to treating the returned reward as env reward and 0 as VLM reward.
+        """
+        # Total reward may already be exposed explicitly.
+        total_reward = float(info.get("total_reward", total_reward))
+
+        # Most useful explicit env keys to try.
+        explicit_env_keys = (
+            "env_reward",
+            "native_reward",
+            "base_reward",
+            "reward_env",
+            "step_env_reward",
+            "raw_env_reward",
+        )
+        explicit_vlm_raw_keys = (
+            "vlm_reward_raw",
+            "raw_vlm_reward",
+            "step_vlm_reward_raw",
+        )
+        explicit_vlm_weighted_keys = (
+            "vlm_reward",
+            "reward_vlm",
+            "step_vlm_reward",
+            "weighted_vlm_reward",
+        )
+
+        env_reward = None
+        for key in explicit_env_keys:
+            if key in info:
+                env_reward = float(info[key])
+                break
+
+        vlm_reward_raw = None
+        for key in explicit_vlm_raw_keys:
+            if key in info:
+                vlm_reward_raw = float(info[key])
+                break
+
+        vlm_reward_weighted = None
+        for key in explicit_vlm_weighted_keys:
+            if key in info:
+                vlm_reward_weighted = float(info[key])
+                break
+
+        vlm_weight = float(self.config.get("vlm_reward_weight", 1.0))
+
+        if env_reward is not None and vlm_reward_raw is not None:
+            return env_reward, vlm_reward_raw, total_reward
+
+        if env_reward is not None and vlm_reward_weighted is not None:
+            if abs(vlm_weight) > 1e-8:
+                vlm_reward_raw = vlm_reward_weighted / vlm_weight
+            else:
+                vlm_reward_raw = 0.0
+            return env_reward, float(vlm_reward_raw), total_reward
+
+        if env_reward is None and vlm_reward_raw is not None:
+            env_reward = total_reward - vlm_weight * vlm_reward_raw
+            return float(env_reward), float(vlm_reward_raw), total_reward
+
+        if env_reward is None and vlm_reward_weighted is not None:
+            env_reward = total_reward - vlm_reward_weighted
+            if abs(vlm_weight) > 1e-8:
+                vlm_reward_raw = vlm_reward_weighted / vlm_weight
+            else:
+                vlm_reward_raw = 0.0
+            return float(env_reward), float(vlm_reward_raw), total_reward
+
+        if not self._logged_reward_split_fallback:
+            logger.warning(
+                "Reward split keys were not found in step info. Falling back to env_reward=returned_reward and "
+                "vlm_reward=0.0. If you want exact split logging, expose explicit env/VLM reward keys in the parent env."
+            )
+            self._logged_reward_split_fallback = True
+
+        return total_reward, 0.0, total_reward
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self._coerce_step_result(super().step(action))
+        info = dict(info)
+
+        env_reward, vlm_reward, total_reward = self._extract_reward_split(reward, info)
+
+        self._last_env_reward = float(env_reward)
+        self._last_vlm_reward = float(vlm_reward)
+        self._last_total_reward = float(total_reward)
+
+        self._episode_env_reward += self._last_env_reward
+        self._episode_vlm_reward += self._last_vlm_reward
+        self._episode_total_reward += self._last_total_reward
+
+        # Step-level logging fields.
+        info["env_reward"] = self._last_env_reward
+        info["vlm_reward"] = self._last_vlm_reward
+        info["total_reward"] = self._last_total_reward
+
+        # Episode-level logging fields for Monitor(info_keywords=...).
+        info["episode_env_reward"] = self._episode_env_reward
+        info["episode_vlm_reward"] = self._episode_vlm_reward
+        info["episode_total_reward"] = self._episode_total_reward
+
+        return obs, float(total_reward), terminated, truncated, info
 
     def _place_agent_on_sidewalk(self):
         if not hasattr(self, "agent") or self.agent is None:
