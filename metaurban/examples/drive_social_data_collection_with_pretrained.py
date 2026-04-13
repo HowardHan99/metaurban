@@ -146,7 +146,7 @@ def parse_args():
     p.add_argument("--ignore-success-done", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--spawn-robot-on-sidewalk", action=argparse.BooleanOptionalAction, default=True)
 
-    p.add_argument("--save-dir", type=str, default="./recorded_social_dataset")
+    p.add_argument("--save-dir", type=str, default="./recorded_dataset")
     p.add_argument("--save-merged-npy", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True)
 

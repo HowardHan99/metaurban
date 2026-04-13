@@ -45,7 +45,7 @@ def build_config(args):
         window_size=(1200, 900),
         vehicle_config=dict(
             show_lidar=False,
-            show_navi_mark=True,
+            show_navi_mark=False, # False True
             show_line_to_navi_mark=False,
             show_dest_mark=False,
             enable_reverse=True,
