@@ -3,7 +3,7 @@ import os
 import cv2
 import numpy as np
 import torch
-
+import gymnasium as gym
 from stable_baselines3.ppo.ppo import PPO
 from stable_baselines3.common.save_util import load_from_zip_file
 
@@ -11,18 +11,29 @@ from metaurban.constants import HELP_MESSAGE
 from metaurban.envs.social_dynamic_env import SocialDynamicMetaUrbanEnv
 
 from metaurban.component.sensors.rgb_camera import RGBCamera
+from metaurban.component.sensors.depth_camera import DepthCamera
+from metaurban.component.sensors.semantic_camera import SemanticCamera
 from metaurban.obs.mix_obs import ThreeSourceMixObservation
 
+class StateOnlyObservationWrapper(gym.ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        assert isinstance(env.observation_space, gym.spaces.Dict)
+        self.observation_space = env.observation_space["state"]
+
+    def observation(self, observation):
+        return observation["state"]
 
 def build_config(args):
     den_scale = 1
     return dict(
         crswalk_density=1,
         object_density=args.object_density,
-        use_render=False,
         walk_on_all_regions=False,
+        use_render=False,
         map=args.map,
         manual_control=False,
+        default_expert=False,
         drivable_area_extension=55,
         height_scale=1,
         show_mid_block_map=False,
@@ -49,12 +60,13 @@ def build_config(args):
             policy_reverse=False,
         ),
 
-        # 只保留 RGB camera
+
         image_observation=True,
         sensors=dict(
             rgb_camera=(RGBCamera, 1024, 576),
+            depth_camera=(DepthCamera, 1024, 576),
+            semantic_camera=(SemanticCamera, 1024, 576),
         ),
-        norm_pixel=False,
         agent_observation=ThreeSourceMixObservation,
         interface_panel=[],
 
@@ -161,38 +173,22 @@ def parse_args():
     return p.parse_args()
 
 
-def capture_sensor_images(env, norm_pixel=False, scale=None):
+def resize_rgb(rgb, scale=1.0):
+    if scale is None or scale == 1.0:
+        return rgb
+    h, w = rgb.shape[:2]
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    return cv2.resize(rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-    def maybe_resize(img, interpolation):
-        if scale is None or scale == 1.0:
-            return img
-        h, w = img.shape[:2]
-        new_w = max(1, int(w * scale))
-        new_h = max(1, int(h * scale))
-        return cv2.resize(img, (new_w, new_h), interpolation=interpolation)
 
-    camera = env.engine.get_sensor("rgb_camera")
-    rgb_front = camera.perceive(
-        to_float=norm_pixel,
-        new_parent_node=env.agent.origin,
-        position=[0, -7, 1.0],
-        hpr=[0, 0, 0],
-    )
+def extract_rgb_from_obs(o, scale=1.0):
 
-    max_rgb_value = rgb_front.max()
-
-    rgb = rgb_front[..., ::-1]
-
-    if max_rgb_value > 1:
-        rgb = rgb.astype(np.uint8)
-    else:
-        rgb = (rgb * 255).astype(np.uint8)
-
-    rgb = maybe_resize(rgb, cv2.INTER_AREA)
-
-    return {
-        "rgb": rgb,
-    }
+    rgb = o["image"][:, :, :, 0]
+    rgb = np.clip(rgb, 0, 1)
+    rgb = (rgb * 255).astype(np.uint8)
+    rgb = resize_rgb(rgb, scale=scale)
+    return rgb
 
 
 def main():
@@ -221,12 +217,12 @@ def main():
         tensorboard_log="./metaurban_ppo-single_scenario_per_process_1e8-tb_logs/",
     )
 
-    expert = PPO("MlpPolicy", env, **algo_config)
+    policy_env = StateOnlyObservationWrapper(env)
+    expert = PPO("MlpPolicy", policy_env, **algo_config)
     _, params, _ = load_from_zip_file(args.policy_path, device="cpu", load_data=False)
     expert.set_parameters(params, exact_match=True, device="cpu")
 
     global_steps = 0
-    action = None
 
     try:
         print(HELP_MESSAGE)
@@ -244,15 +240,10 @@ def main():
 
             o_next, r, tm, tc, info = env.step(action)
 
-            sensor_imgs = capture_sensor_images(
-                env,
-                norm_pixel=config.get("norm_pixel", False),
-                scale=args.image_scale,
-            )
-
+            rgb = extract_rgb_from_obs(o, scale=args.image_scale)
             cv2.imwrite(
                 os.path.join(img_dir, f"step_{global_steps:06d}.png"),
-                sensor_imgs["rgb"][..., ::-1]   # RGB -> BGR for cv2.imwrite
+                cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
             )
 
             action_to_save = info["action"] if ("action" in info) else action
