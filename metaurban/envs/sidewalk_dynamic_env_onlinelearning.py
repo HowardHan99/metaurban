@@ -8,7 +8,7 @@ from typing import Union
 import numpy as np
 import torch
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import AutoProcessor, AutoModelForImageTextToText
 
 # try:
 #     from transformers import Qwen3VLForConditionalGeneration
@@ -118,7 +118,7 @@ METAURBAN_DEFAULT_CONFIG = dict(
 
     # ===== Online VLM Reward =====
     use_vlm_reward=True,
-    vlm_model_name="Qwen/Qwen2.5-VL-2B-Instruct",
+    vlm_model_name="Qwen/Qwen2-VL-2B-Instruct",
     vlm_device="cuda",
     vlm_dtype="bfloat16",
     vlm_query_interval=3,
@@ -403,13 +403,13 @@ Return JSON with exactly this schema:
                 torch_dtype = torch.float32
 
             if self.config["vlm_device"] == "cuda":
-                self._vlm_model = AutoModelForVision2Seq.from_pretrained(
+                self._vlm_model = AutoModelForImageTextToText.from_pretrained(
                     self.config["vlm_model_name"],
                     torch_dtype=torch_dtype,
                     device_map="auto",
                 )
             else:
-                self._vlm_model = AutoModelForVision2Seq.from_pretrained(
+                self._vlm_model = AutoModelForImageTextToText.from_pretrained(
                     self.config["vlm_model_name"],
                     torch_dtype=torch_dtype,
                 ).to(self.config["vlm_device"])

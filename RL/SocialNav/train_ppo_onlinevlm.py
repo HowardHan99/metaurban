@@ -175,7 +175,7 @@ config = dict(
 
         # ===== Online VLM reward =====
         use_vlm_reward=True,
-        vlm_model_name="Qwen/Qwen3-VL-8B-Instruct",
+        vlm_model_name="Qwen/Qwen2-VL-2B-Instruct",
         vlm_device=args.device,
         vlm_dtype="bfloat16",
         vlm_query_interval=5,
