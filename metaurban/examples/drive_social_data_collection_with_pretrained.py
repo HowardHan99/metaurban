@@ -11,8 +11,6 @@ from metaurban.constants import HELP_MESSAGE
 from metaurban.envs.social_dynamic_env import SocialDynamicMetaUrbanEnv
 
 from metaurban.component.sensors.rgb_camera import RGBCamera
-from metaurban.component.sensors.depth_camera import DepthCamera
-from metaurban.component.sensors.semantic_camera import SemanticCamera
 from metaurban.obs.mix_obs import ThreeSourceMixObservation
 
 
@@ -51,12 +49,12 @@ def build_config(args):
             policy_reverse=False,
         ),
 
+        # 只保留 RGB camera
         image_observation=True,
         sensors=dict(
-            rgb_camera=(RGBCamera, 256, 256),
-            depth_camera=(DepthCamera, 256, 256),
-            semantic_camera=(SemanticCamera, 256, 256),
+            rgb_camera=(RGBCamera, 1024, 576),
         ),
+        norm_pixel=False,
         agent_observation=ThreeSourceMixObservation,
         interface_panel=[],
 
@@ -110,10 +108,18 @@ def parse_args():
     p.add_argument("--num-scenarios", type=int, default=100)
     p.add_argument("--object-density", type=float, default=0.7)
 
-    p.add_argument("--scene-type", type=str, default="default",
-                   choices=["default", "commercial", "commute", "leisure", "constrained"])
-    p.add_argument("--scene-building-source", type=str, default="default",
-                   choices=["scene", "default"])
+    p.add_argument(
+        "--scene-type",
+        type=str,
+        default="default",
+        choices=["default", "commercial", "commute", "leisure", "constrained"]
+    )
+    p.add_argument(
+        "--scene-building-source",
+        type=str,
+        default="default",
+        choices=["scene", "default"]
+    )
 
     p.add_argument("--crossing-ped-num", type=int, default=6)
     p.add_argument("--vulnerable-ped-num", type=int, default=8)
@@ -150,7 +156,43 @@ def parse_args():
     p.add_argument("--save-merged-npy", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True)
 
+    p.add_argument("--image-scale", type=float, default=0.5)
+
     return p.parse_args()
+
+
+def capture_sensor_images(env, norm_pixel=False, scale=None):
+
+    def maybe_resize(img, interpolation):
+        if scale is None or scale == 1.0:
+            return img
+        h, w = img.shape[:2]
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        return cv2.resize(img, (new_w, new_h), interpolation=interpolation)
+
+    camera = env.engine.get_sensor("rgb_camera")
+    rgb_front = camera.perceive(
+        to_float=norm_pixel,
+        new_parent_node=env.agent.origin,
+        position=[0, -7, 1.0],
+        hpr=[0, 0, 0],
+    )
+
+    max_rgb_value = rgb_front.max()
+
+    rgb = rgb_front[..., ::-1]
+
+    if max_rgb_value > 1:
+        rgb = rgb.astype(np.uint8)
+    else:
+        rgb = (rgb * 255).astype(np.uint8)
+
+    rgb = maybe_resize(rgb, cv2.INTER_AREA)
+
+    return {
+        "rgb": rgb,
+    }
 
 
 def main():
@@ -193,23 +235,27 @@ def main():
             obs_for_policy = o["state"] if isinstance(o, dict) and "state" in o else o
             obs_np = np.asarray(obs_for_policy, dtype=np.float32)
 
-            action = expert.predict(torch.from_numpy(obs_np).reshape(1, -1), deterministic=True)[0]
+            action = expert.predict(
+                torch.from_numpy(obs_np).reshape(1, -1),
+                deterministic=True
+            )[0]
             action = np.clip(action, a_min=-1.0, a_max=1.0)
             action = action[0].tolist()
 
             o_next, r, tm, tc, info = env.step(action)
 
-            if isinstance(o, dict) and "image" in o:
-                rgb = o["image"][:, :, :, 0]
-                rgb = np.clip(rgb, 0, 1)
-                rgb = (rgb * 255).astype(np.uint8)
-                cv2.imwrite(
-                    os.path.join(img_dir, f"step_{global_steps:06d}.png"),
-                    cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-                )
+            sensor_imgs = capture_sensor_images(
+                env,
+                norm_pixel=config.get("norm_pixel", False),
+                scale=args.image_scale,
+            )
+
+            cv2.imwrite(
+                os.path.join(img_dir, f"step_{global_steps:06d}.png"),
+                sensor_imgs["rgb"][..., ::-1]   # RGB -> BGR for cv2.imwrite
+            )
 
             action_to_save = info["action"] if ("action" in info) else action
-
             state_to_save = o["state"] if isinstance(o, dict) and "state" in o else o
 
             np.save(
@@ -248,8 +294,10 @@ def main():
             o = o_next
 
             if tm or tc:
-                o, _ = env.reset(((env.current_seed + 1) % config['num_scenarios'])
-                                 + env.engine.global_config['start_seed'])
+                o, _ = env.reset(
+                    ((env.current_seed + 1) % config["num_scenarios"])
+                    + env.engine.global_config["start_seed"]
+                )
 
     finally:
         env.close()
