@@ -183,10 +183,14 @@ def resize_rgb(rgb, scale=1.0):
 
 
 def extract_rgb_from_obs(o, scale=1.0):
-
     rgb = o["image"][:, :, :, 0]
-    rgb = np.clip(rgb, 0, 1)
-    rgb = (rgb * 255).astype(np.uint8)
+
+    if rgb.dtype != np.uint8:
+        if rgb.max() <= 1.0:
+            rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+        else:
+            rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+
     rgb = resize_rgb(rgb, scale=scale)
     return rgb
 
@@ -218,7 +222,7 @@ def main():
     )
 
     policy_env = StateOnlyObservationWrapper(env)
-    expert = PPO("MlpPolicy", policy_env, **algo_config)
+    expert = PPO("MlpPolicy", policy_env, device="cpu",**algo_config)
     _, params, _ = load_from_zip_file(args.policy_path, device="cpu", load_data=False)
     expert.set_parameters(params, exact_match=True, device="cpu")
 
@@ -243,7 +247,8 @@ def main():
             rgb = extract_rgb_from_obs(o, scale=args.image_scale)
             cv2.imwrite(
                 os.path.join(img_dir, f"step_{global_steps:06d}.png"),
-                cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                rgb
+                # cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
             )
 
             action_to_save = info["action"] if ("action" in info) else action
