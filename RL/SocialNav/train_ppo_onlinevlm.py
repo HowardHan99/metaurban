@@ -5,13 +5,75 @@ from stable_baselines3.ppo.ppo import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
+from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback, BaseCallback
 from stable_baselines3.common.save_util import load_from_zip_file
 
 from metaurban.constants import HELP_MESSAGE
 from metaurban.obs.state_obs import LidarStateObservation
 
 from metaurban.envs.social_dynamic_env_onlinelearning import SocialDynamicMetaUrbanEnv
+
+
+class StepRewardTensorboardCallback(BaseCallback):
+    """
+    Log step-level reward split from env info to TensorBoard.
+    Designed for VecEnv; by default reads infos[0] for DummyVecEnv with one env.
+    """
+
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", None)
+        if not infos:
+            return True
+
+        if isinstance(infos, (list, tuple)):
+            if len(infos) == 0:
+                return True
+            info = infos[0]
+        else:
+            info = infos
+
+        if not isinstance(info, dict):
+            return True
+
+        # Step-level reward logs
+        if "env_reward" in info:
+            self.logger.record("step/env_reward", float(info["env_reward"]))
+
+        if "vlm_reward" in info:
+            self.logger.record("step/vlm_reward_raw", float(info["vlm_reward"]))
+
+        if "vlm_reward_weighted" in info:
+            self.logger.record("step/vlm_reward_weighted", float(info["vlm_reward_weighted"]))
+
+        if "total_reward" in info:
+            self.logger.record("step/total_reward", float(info["total_reward"]))
+
+        # Diagnostics from parent env reward_function
+        if "vlm_confidence" in info:
+            self.logger.record("step/vlm_confidence", float(info["vlm_confidence"]))
+
+        if "base_reward" in info:
+            self.logger.record("step/base_reward", float(info["base_reward"]))
+
+        if "vlm_reward_raw" in info:
+            self.logger.record("debug/vlm_reward_raw_from_parent", float(info["vlm_reward_raw"]))
+
+        if "vlm_reward_weighted" in info:
+            self.logger.record("debug/vlm_reward_weighted_from_parent", float(info["vlm_reward_weighted"]))
+
+        if "step_reward" in info:
+            self.logger.record("debug/step_reward_from_parent", float(info["step_reward"]))
+
+        if "vlm_label_class" in info:
+            label = str(info["vlm_label_class"])
+            self.logger.record("step/vlm_is_positive", 1.0 if label == "POSITIVE_SOCIAL" else 0.0)
+            self.logger.record("step/vlm_is_neutral", 1.0 if label == "NEUTRAL" else 0.0)
+            self.logger.record("step/vlm_is_negative", 1.0 if label == "NEGATIVE_SOCIAL" else 0.0)
+
+        return True
 
 
 parser = argparse.ArgumentParser()
@@ -272,7 +334,12 @@ def train():
         save_vecnormalize=True,
     )
 
-    callbacks = CallbackList([checkpoint_callback])
+    step_reward_callback = StepRewardTensorboardCallback()
+
+    callbacks = CallbackList([
+        checkpoint_callback,
+        step_reward_callback,
+    ])
 
     model.learn(
         total_timesteps=args.total_timesteps,

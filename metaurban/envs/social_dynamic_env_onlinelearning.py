@@ -162,10 +162,8 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
         2. Reconstruct from known weighted/raw VLM keys.
         3. Fall back to treating the returned reward as env reward and 0 as VLM reward.
         """
-        # Total reward may already be exposed explicitly.
         total_reward = float(info.get("total_reward", total_reward))
 
-        # Most useful explicit env keys to try.
         explicit_env_keys = (
             "env_reward",
             "native_reward",
@@ -251,12 +249,18 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
         self._episode_vlm_reward += self._last_vlm_reward
         self._episode_total_reward += self._last_total_reward
 
-        # Step-level logging fields.
+        # Step-level logging fields
         info["env_reward"] = self._last_env_reward
-        info["vlm_reward"] = self._last_vlm_reward
+        info["vlm_reward"] = self._last_vlm_reward  # raw VLM reward before weighting
         info["total_reward"] = self._last_total_reward
 
-        # Episode-level logging fields for Monitor(info_keywords=...).
+        vlm_weight = float(self.config.get("vlm_reward_weight", 1.0))
+        info["vlm_reward_weighted"] = float(self._last_vlm_reward) * vlm_weight
+
+        if "base_reward" not in info:
+            info["base_reward"] = self._last_env_reward
+
+        # Episode-level logging fields for Monitor(info_keywords=...)
         info["episode_env_reward"] = self._episode_env_reward
         info["episode_vlm_reward"] = self._episode_vlm_reward
         info["episode_total_reward"] = self._episode_total_reward
