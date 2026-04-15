@@ -333,7 +333,7 @@ def inspect_vec_obs(obs, prefix="obs"):
 
 def build_train_and_eval_envs(args):
     train_cfg = build_image_state_env_config(args.image_width, args.image_height, training=True)
-    eval_cfg = build_image_state_env_config(args.image_width, args.image_height, training=False)
+    eval_cfg = build_image_state_env_config(args.image_width, args.image_height, training=True)
 
     train_seeds = [args.seed + i for i in range(args.n_envs)]
 
@@ -395,6 +395,10 @@ def main():
 
     try:
         env, eval_env, train_seeds, eval_seeds = build_train_and_eval_envs(args)
+        print("[DEBUG] Testing eval env reset before learn()...")
+        for i in range(5):
+            obs = eval_env.reset()
+            print(f"[DEBUG] eval reset {i} ok")
 
         print(f"=== Training image+state SAC for {args.total_timesteps} steps with {args.n_envs} envs ===")
         print(f"    image size: {args.image_width}x{args.image_height}")
