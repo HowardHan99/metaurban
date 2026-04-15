@@ -217,7 +217,7 @@ def patch_orca_planning_fallback() -> None:
 def parse_args():
     parser = argparse.ArgumentParser(description="Train image+state SAC on MetaUrban")
     parser.add_argument("--total_timesteps", type=int, default=300_000)
-    parser.add_argument("--n_envs", type=int, default=2)
+    parser.add_argument("--n_envs", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--eval_freq", type=int, default=20_000)
     parser.add_argument("--checkpoint_freq", type=int, default=20_000)
