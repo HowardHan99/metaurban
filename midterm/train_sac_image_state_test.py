@@ -85,7 +85,6 @@ class CleanDictObsWrapper(gym.Wrapper):
     @staticmethod
     def _clean_sensor_array(arr: Any) -> np.ndarray:
         arr = np.asarray(arr)
-        # MetaUrban often returns (H, W, C, K). Keep the first stack/frame.
         if arr.ndim == 4:
             arr = arr[..., 0]
         if arr.ndim == 2:
@@ -129,16 +128,12 @@ class CleanDictObsWrapper(gym.Wrapper):
 
         expected_shape = self.observation_space.spaces["image"].shape
         if image.shape != expected_shape:
-            raise ValueError(
-                f"Image shape mismatch. Got {image.shape}, expected {expected_shape}."
-            )
+            raise ValueError(f"Image shape mismatch. Got {image.shape}, expected {expected_shape}.")
 
         state = np.asarray(raw_obs["state"], dtype=np.float32)
         expected_state_shape = self.observation_space.spaces["state"].shape
         if state.shape != expected_state_shape:
-            raise ValueError(
-                f"State shape mismatch. Got {state.shape}, expected {expected_state_shape}."
-            )
+            raise ValueError(f"State shape mismatch. Got {state.shape}, expected {expected_state_shape}.")
 
         return {"image": image, "state": state}
 
@@ -207,7 +202,6 @@ def patch_orca_planning_fallback() -> None:
             seg_len = np.linalg.norm(np.diff(np.stack([xs, ys], axis=1), axis=0), axis=1)
             total_len = float(seg_len.sum()) if len(seg_len) > 0 else 0.0
 
-            # Match the indexing pattern used by this MetaUrban branch.
             time_length_all.append([[total_len]])
             points_all.append(points)
             speed_all.append([[1.0]])
@@ -222,11 +216,11 @@ def patch_orca_planning_fallback() -> None:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train image+state SAC on MetaUrban")
-    parser.add_argument("--total_timesteps", type=int, default=100_000)
+    parser.add_argument("--total_timesteps", type=int, default=300_000)
     parser.add_argument("--n_envs", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--eval_freq", type=int, default=10_000)
-    parser.add_argument("--checkpoint_freq", type=int, default=50_000)
+    parser.add_argument("--eval_freq", type=int, default=20_000)
+    parser.add_argument("--checkpoint_freq", type=int, default=20_000)
     parser.add_argument("--log_dir", type=str, default="./midterm_logs/SAC_image_state")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a .zip model to resume")
     parser.add_argument("--image_width", type=int, default=160)
@@ -236,16 +230,12 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--idle_penalty", type=float, default=0.1)
     parser.add_argument("--speed_threshold", type=float, default=0.5)
-    parser.add_argument(
-        "--debug_reset",
-        action="store_true",
-        help="Run a single reset() on train/eval env before training."
-    )
+    parser.add_argument("--debug_reset", action="store_true", help="Run a reset() on train/eval env before training.")
+    parser.add_argument("--disable_eval", action="store_true", help="Disable EvalCallback to avoid eval_env reset crashes.")
     return parser.parse_args()
 
 
 def _get_sac_env_overrides() -> dict:
-    """Reward-balance overrides that reduce the 'always-brake' local minimum."""
     return dict(
         no_negative_reward=False,
         driving_reward=3.0,
@@ -333,6 +323,8 @@ def inspect_vec_obs(obs, prefix="obs"):
 
 def build_train_and_eval_envs(args):
     train_cfg = build_image_state_env_config(args.image_width, args.image_height, training=True)
+
+    # 先和 train 保持一致，避免 training=False 的 reset 路径出问题
     eval_cfg = build_image_state_env_config(args.image_width, args.image_height, training=True)
 
     train_seeds = [args.seed + i for i in range(args.n_envs)]
@@ -376,11 +368,28 @@ def build_train_and_eval_envs(args):
         env = DummyVecEnv(env_fns)
         eval_env = DummyVecEnv(eval_env_fns)
     else:
-        env = SubprocVecEnv(env_fns)
+        if args.n_envs == 1:
+            print("[DEBUG] n_envs=1, using DummyVecEnv for train env.")
+            env = DummyVecEnv(env_fns)
+        else:
+            env = SubprocVecEnv(env_fns)
+
         eval_env = DummyVecEnv(eval_env_fns)
 
     return env, eval_env, train_seeds, eval_seeds
 
+class SafeEvalCallback(EvalCallback):
+    """
+    EvalCallback that never crashes training.
+    If evaluation fails (e.g. env.reset() error), skip this eval round and continue.
+    """
+
+    def _on_step(self) -> bool:
+        try:
+            return super()._on_step()
+        except Exception as e:
+            print(f"[WARN] Eval failed, skipping this round: {repr(e)}")
+            return True
 
 def main():
     args = parse_args()
@@ -395,10 +404,6 @@ def main():
 
     try:
         env, eval_env, train_seeds, eval_seeds = build_train_and_eval_envs(args)
-        print("[DEBUG] Testing eval env reset before learn()...")
-        for i in range(5):
-            obs = eval_env.reset()
-            print(f"[DEBUG] eval reset {i} ok")
 
         print(f"=== Training image+state SAC for {args.total_timesteps} steps with {args.n_envs} envs ===")
         print(f"    image size: {args.image_width}x{args.image_height}")
@@ -452,17 +457,20 @@ def main():
             name_prefix="sac_imgstate",
         )
 
-        eval_cb = EvalCallback(
-            eval_env,
-            best_model_save_path=os.path.join(log_dir, "best_model"),
-            log_path=os.path.join(log_dir, "eval_logs"),
-            eval_freq=max(args.eval_freq // max(args.n_envs, 1), 1),
-            n_eval_episodes=max(1, len(eval_seeds)),
-            deterministic=True,
-            render=False,
-        )
-
-        callbacks = CallbackList([checkpoint_cb, eval_cb])
+        if args.disable_eval:
+            print("[INFO] EvalCallback disabled. Training will run without periodic evaluation.")
+            callbacks = CallbackList([checkpoint_cb])
+        else:
+            eval_cb = SafeEvalCallback(
+                eval_env,
+                best_model_save_path=os.path.join(log_dir, "best_model"),
+                log_path=os.path.join(log_dir, "eval_logs"),
+                eval_freq=max(args.eval_freq // max(args.n_envs, 1), 1),
+                n_eval_episodes=max(1, len(eval_seeds)),
+                deterministic=True,
+                render=False,
+            )
+            callbacks = CallbackList([checkpoint_cb, eval_cb])
 
         model.learn(total_timesteps=args.total_timesteps, callback=callbacks)
         model.save(os.path.join(log_dir, "final_model"))
