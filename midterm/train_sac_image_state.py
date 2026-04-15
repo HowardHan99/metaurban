@@ -240,7 +240,7 @@ def build_image_state_env_config(image_width: int, image_height: int, training: 
     cfg.update(_get_sac_env_overrides())
     cfg.update(
         dict(
-            use_render=True, # True False
+            use_render=False, # True False
             image_observation=True,
             agent_observation=ThreeSourceMixObservation,
             interface_panel=[],
