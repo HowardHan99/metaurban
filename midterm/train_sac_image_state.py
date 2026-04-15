@@ -240,7 +240,7 @@ def build_image_state_env_config(image_width: int, image_height: int, training: 
     cfg.update(_get_sac_env_overrides())
     cfg.update(
         dict(
-            use_render=False,
+            use_render=True, # True False
             image_observation=True,
             agent_observation=ThreeSourceMixObservation,
             interface_panel=[],
@@ -257,7 +257,7 @@ def build_image_state_env_config(image_width: int, image_height: int, training: 
         cfg["vehicle_config"].update(
             dict(
                 show_lidar=False,
-                show_navi_mark=True,
+                show_navi_mark=False,
                 show_line_to_navi_mark=False,
                 show_dest_mark=False,
             )
