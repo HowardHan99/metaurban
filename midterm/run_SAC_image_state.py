@@ -7,10 +7,10 @@ from train_sac_image_state_test import (
     make_env,
 )
 
-CHECKPOINT_PATH = "./midterm_logs/SAC_image_state/sac_imgstate_seed0/best_model/best_model.zip"
+CHECKPOINT_PATH = "./midterm_logs/SAC_image_state/sac_imgstate_seed0_0415_1149/checkpoints/sac_imgstate_260000_steps.zip"
 SEED = 0
-IMAGE_W = 160
-IMAGE_H = 120
+IMAGE_W = 80
+IMAGE_H = 60
 env_cfg = build_image_state_env_config(IMAGE_W, IMAGE_H, training=False)
 env_cfg["use_render"] = True
 
