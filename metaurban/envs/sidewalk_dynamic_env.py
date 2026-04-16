@@ -39,7 +39,7 @@ METAURBAN_DEFAULT_CONFIG = dict(
     spawn_elderly_num=0,
     show_mid_block_map=False,
     # ===== Traffic =====
-    traffic_density=0.1,
+    traffic_density=0.0, #0.1
     need_inverse_traffic=False,
     traffic_mode=TrafficMode.Trigger,  # "Respawn", "Trigger"
     random_traffic=False,  # Traffic is randomized at default.

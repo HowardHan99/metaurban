@@ -102,7 +102,7 @@ def parse_args():
     p.add_argument("--map", type=str, default="C")
     p.add_argument("--horizon", type=int, default=300)
     p.add_argument("--num-scenarios", type=int, default=100)
-    p.add_argument("--object-density", type=float, default=0.7)
+    p.add_argument("--object-density", type=float, default=0.2)
 
     p.add_argument("--scene-type", type=str, default="default",
                    choices=["default", "commercial", "commute", "leisure", "constrained"])

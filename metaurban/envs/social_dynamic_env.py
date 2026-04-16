@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 SOCIAL_EXTRA_CONFIG = dict(
     # Scene type configuration
     scene_type="default",  # One of: default, commercial, commute, leisure, constrained
-    scene_building_source="scene",  # One of: scene, default
+    scene_building_source="default",  # One of: scene, default
 
     # Robot spawn location configuration
     # If True, robot spawns on sidewalk; if False, robot spawns on road (default)
@@ -57,12 +57,12 @@ SOCIAL_EXTRA_CONFIG = dict(
 
     # Group placement controls (preview-oriented)
     group_spawn_near_ego=False,
-    group_spawn_min_radius=5.0,
-    group_spawn_max_radius=10.0,
+    group_spawn_min_radius=15.0,
+    group_spawn_max_radius=20.0,
     group_route_min_ego_distance=8.0,
     group_route_min_separation=5.5,
-    group_route_start_exclusion_points=2,
-    group_route_start_exclusion_radius=6.0,
+    group_route_start_exclusion_points=5,# 2
+    group_route_start_exclusion_radius=10.0,#6
     group_cluster_num=4,
     group_cluster_size_min=3,
     group_cluster_size_max=5,
