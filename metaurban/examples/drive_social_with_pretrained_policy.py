@@ -64,6 +64,8 @@ def build_config(args):
         group_spawn_max_radius=args.group_spawn_max_radius,
         group_route_min_ego_distance=args.group_route_min_ego_distance,
         group_route_min_separation=args.group_route_min_separation,
+        group_route_start_exclusion_points=args.group_route_start_exclusion_points,
+        group_route_start_exclusion_radius=args.group_route_start_exclusion_radius,
         group_member_radius=args.group_member_radius,
         group_member_ring_step=args.group_member_ring_step,
         group_member_radius_jitter=args.group_member_radius_jitter,
@@ -82,6 +84,7 @@ def build_config(args):
         spawn_human_num=int(args.spawn_human_num * den_scale),
         spawn_wheelchairman_num=max(1, int(args.spawn_human_num // 20)),
         spawn_elderly_num=args.spawn_elderly_num,
+        spawn_increase_per_episode=args.spawn_increase_per_episode,
         spawn_edog_num=0,
         spawn_erobot_num=0,
         spawn_drobot_num=0,
@@ -116,6 +119,8 @@ def parse_args():
     p.add_argument("--group-spawn-max-radius", type=float, default=11.0)
     p.add_argument("--group-route-min-ego-distance", type=float, default=8.0)
     p.add_argument("--group-route-min-separation", type=float, default=5.5)
+    p.add_argument("--group-route-start-exclusion-points", type=int, default=2)
+    p.add_argument("--group-route-start-exclusion-radius", type=float, default=6.0)
     p.add_argument("--group-member-radius", type=float, default=1.45)
     p.add_argument("--group-member-ring-step", type=float, default=0.62)
     p.add_argument("--group-member-radius-jitter", type=float, default=0.16)
@@ -123,7 +128,7 @@ def parse_args():
     p.add_argument("--group-member-idle-shift-prob", type=float, default=0.015)
     p.add_argument("--group-member-idle-shift-steps-mean", type=int, default=18)
     p.add_argument("--group-member-idle-shift-radius", type=float, default=0.22)
-    p.add_argument("--group-release-enable", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--group-release-enable", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--group-release-steps-mean", type=int, default=180)
     p.add_argument("--group-release-steps-std", type=int, default=40)
     p.add_argument("--group-release-steps-min", type=int, default=60)
@@ -133,6 +138,8 @@ def parse_args():
     p.add_argument("--vulnerable-pause-prob", type=float, default=0.02)
     p.add_argument("--vulnerable-pause-steps-mean", type=int, default=16)
     p.add_argument("--spawn-human-num", type=int, default=40)
+    p.add_argument("--spawn-increase-per-episode", type=int, default=0,
+                   help="Increase spawn_human_num by this amount after each reset (0=no increase)")
     p.add_argument("--spawn-elderly-num", type=int, default=0)
     p.add_argument("--ignore-success-done", action=argparse.BooleanOptionalAction, default=False)
 
