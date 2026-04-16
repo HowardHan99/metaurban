@@ -61,6 +61,8 @@ SOCIAL_EXTRA_CONFIG = dict(
     group_spawn_max_radius=10.0,
     group_route_min_ego_distance=8.0,
     group_route_min_separation=5.5,
+    group_route_start_exclusion_points=2,
+    group_route_start_exclusion_radius=6.0,
     group_cluster_num=4,
     group_cluster_size_min=3,
     group_cluster_size_max=5,
@@ -72,11 +74,14 @@ SOCIAL_EXTRA_CONFIG = dict(
     group_member_idle_shift_steps_mean=18,
     group_member_idle_shift_radius=0.22,
     group_cluster_min_separation=3.8,
-    group_release_enable=True,
+    group_release_enable=False,
     group_release_steps_mean=180,
     group_release_steps_std=40,
     group_release_steps_min=60,
     ignore_success_done=False,
+
+    # Dynamic spawning: increase pedestrians per episode
+    spawn_increase_per_episode=0,  # 0 means constant spawn_human_num; >0 increases by this amount per reset
 
     # Required by sidewalk asset manager in this branch
     object_density=1.0,
@@ -122,6 +127,26 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
 
     def reset(self, seed=None):
         """Override reset to optionally place agent on sidewalk after standard reset."""
+        # Dynamically increase spawn_human_num based on episode count if configured
+        spawn_increase = self.config.get("spawn_increase_per_episode", 0)
+        if spawn_increase > 0:
+            # Save base spawn value on first reset
+            if not hasattr(self, "_base_spawn_human_num"):
+                self._base_spawn_human_num = self.config.get("spawn_human_num", 40)
+            
+            reset_count = getattr(self, "_reset_count", 0)
+            base_spawn = self._base_spawn_human_num
+            dynamic_spawn = base_spawn + reset_count * spawn_increase
+            self.config["spawn_human_num"] = int(dynamic_spawn)
+            logger.info(
+                f"Episode {reset_count}: dynamically set spawn_human_num={int(dynamic_spawn)} "
+                f"(base={base_spawn} + {reset_count}*{spawn_increase})"
+            )
+            self._reset_count = reset_count + 1
+        else:
+            if not hasattr(self, "_reset_count"):
+                self._reset_count = 0
+
         obs, info = super().reset(seed=seed)
 
         # If enabled, move agent to sidewalk after reset

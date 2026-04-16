@@ -29,8 +29,12 @@ This document describes three major new features for the MetaUrban Social Naviga
     - Standing-only conversational clusters (no moving-group mode)
     - Concentric ring arrangement with member spacing controlled by radius/ring-step
     - Group cluster center candidates are filtered to sidewalk regions
-    - Route-aware near-ego placement and automatic timed release
-   - Automatic cluster release mechanism
+    - Route-aware near-ego placement with route-start exclusion support
+    - Group release is optional and disabled by default
+
+4. **Episode-Aware Pedestrian Scaling** - Progressive Density Control
+   - Optional per-episode increase of total pedestrians
+   - Keeps first episode at base count, then applies linear growth per reset
 
 3. **Vulnerable Pedestrians** - Social Diversity
    - Three subtypes: wheelchair, elderly, distracted
@@ -115,7 +119,8 @@ The CLI alias `--env-mode default` is equivalent to using the social environment
 - Cluster centers are static after initialization.
 - Members keep a conversation ring formation and only do subtle local idle shifts.
 - Members face inward with heading smoothing to reduce visual wobble.
-- After release timer expires, members convert to `normal` and rejoin regular ORCA movement.
+- By default, release is disabled so grouped members keep cluster behavior for the whole episode.
+- If release is enabled, members convert to `normal` after timer expiry and rejoin regular ORCA movement.
 
 #### Group Lifecycle
 
@@ -157,11 +162,14 @@ All members face center, forming a "chat circle"
 | Cluster spacing | 3.8m | Minimum separation distance | config-only (`group_cluster_min_separation`) |
 | Route min ego distance | 8.0m | Keep clusters away from ego route start | `--group-route-min-ego-distance` |
 | Route min separation | 5.5m | Extra cluster-to-cluster spacing in route-aware placement | `--group-route-min-separation` |
+| Route start exclusion points | 2 | Skip first N ego route checkpoints during near-ego placement | `--group-route-start-exclusion-points` |
+| Route start exclusion radius | 6.0m | Reject candidates too close to route start anchor | `--group-route-start-exclusion-radius` |
 | Idle shift prob | 0.015 | Subtle local movement probability | `--group-member-idle-shift-prob` |
 | Idle shift radius | 0.22m | Max local movement radius | `--group-member-idle-shift-radius` |
 | Release mean | 180 | Average lifespan (steps) | `--group-release-steps-mean` |
 | Release std dev | 40 | Lifespan variance | `--group-release-steps-std` |
 | Minimum lifespan | 60 | Minimum residence steps | `--group-release-steps-min` |
+| Release enabled | False | Enable timed conversion from group to normal | `--group-release-enable` |
 
 #### Sidewalk Constraint Scope
 
@@ -195,8 +203,20 @@ python metaurban/social_reward/collect_dataset.py \
     --group-spawn-max-radius 11 \
     --group-route-min-ego-distance 8 \
     --group-route-min-separation 5.5 \
+        --group-route-start-exclusion-points 2 \
+        --group-route-start-exclusion-radius 6.0 \
   --num-episodes 5 \
   --use-render
+```
+
+```bash
+# Progressive density: keep first episode at 40, then +3 pedestrians per episode
+python metaurban/social_reward/collect_dataset.py \
+    --env-mode social \
+    --spawn-human-num 40 \
+    --spawn-increase-per-episode 3 \
+    --num-episodes 10 \
+    --use-render
 ```
 
 #### Log Output Example
@@ -282,9 +302,10 @@ python metaurban/social_reward/collect_dataset.py \
   --group-cluster-num 4 \
   --group-cluster-size-min 5 \
   --group-cluster-size-max 8 \
-  --group-release-enable \
+    --no-group-release-enable \
   --group-release-steps-mean 180 \
   --group-spawn-near-ego \
+    --spawn-increase-per-episode 3 \
   --use-render \
   --out-dir ./output/social_data
 ```
@@ -502,6 +523,7 @@ config = dict(
     
     # Pedestrian configuration
     spawn_human_num=30,             # Total pedestrian count
+    spawn_increase_per_episode=0,   # Optional linear increment per reset (0=disabled)
     spawn_wheelchairman_num=1,      # Wheelchair pedestrian count
     spawn_elderly_num=2,            # Elderly pedestrian count
     
@@ -530,9 +552,11 @@ config = dict(
     group_spawn_near_ego=False,     # Whether to spawn near ego
     group_spawn_min_radius=5.0,     # Min ego-relative distance
     group_spawn_max_radius=10.0,    # Max ego-relative distance
+    group_route_start_exclusion_points=2, # Skip initial checkpoints near route start
+    group_route_start_exclusion_radius=6.0, # Min distance to route start anchor
     
     # Group release configuration
-    group_release_enable=True,      # Whether to enable release
+    group_release_enable=False,     # Default disabled: keep clusters stable in-episode
     group_release_steps_mean=180,   # Mean release duration
     group_release_steps_std=40,     # Release duration std dev
     group_release_steps_min=60,     # Minimum lifespan
@@ -555,6 +579,7 @@ python metaurban/social_reward/collect_dataset.py \
   
   # Pedestrian configuration
   --spawn-human-num 30 \
+    --spawn-increase-per-episode 0 \
   --spawn-wheelchairman-num 1 \
   --spawn-elderly-num 2 \
   
@@ -575,7 +600,9 @@ python metaurban/social_reward/collect_dataset.py \
   --group-spawn-near-ego \
   --group-spawn-min-radius 5 \
   --group-spawn-max-radius 10 \
-  --group-release-enable \
+    --group-route-start-exclusion-points 2 \
+    --group-route-start-exclusion-radius 6.0 \
+    --no-group-release-enable \
   --group-release-steps-mean 180 \
   --group-release-steps-std 40 \
   --group-release-steps-min 60 \
@@ -662,7 +689,7 @@ python metaurban/social_reward/collect_dataset.py \
     --group-spawn-near-ego \
     --group-spawn-min-radius 6 \
     --group-spawn-max-radius 11 \
-    --group-release-enable \
+    --no-group-release-enable \
     --group-release-steps-mean 40 \
     --group-release-steps-std 3 \
     --group-release-steps-min 30 \
@@ -675,10 +702,6 @@ Recent successful log pattern:
 
 ```text
 [INFO] Social role histogram: crossing=0 vulnerable=0 group=23 normal=27
-[INFO] Released group cluster 2 with 5 pedestrians
-[INFO] Released group cluster 3 with 6 pedestrians
-[INFO] Released group cluster 0 with 7 pedestrians
-[INFO] Released group cluster 1 with 5 pedestrians
 [INFO] Episode ended! Scenario Index: 710 Reason: max step
 ```
 
@@ -741,7 +764,7 @@ python metaurban/social_reward/collect_dataset.py \
 ## FAQ
 
 ### Q: Why aren't group members moving?
-**A:** This is by design on current `env_change`: group clusters are standing-only during cluster phase. Members keep formation (with slight idle shifts) until release, then move independently as `normal` pedestrians.
+**A:** This is by design on current `env_change`: group clusters are standing-only during cluster phase. Members keep formation (with slight idle shifts). Since default is now `group_release_enable=False`, they typically stay grouped for the entire episode unless you explicitly enable release.
 
 ### Q: Why is vulnerable pedestrian speed so slow?
 **A:** Vulnerable pedestrians are intentionally designed to move slowly, mimicking reduced mobility. Speed ranges are determined by the `speed_scale` of each subtype (0.45-0.95x).
@@ -784,4 +807,9 @@ python metaurban/social_reward/collect_dataset.py \
     - Removed moving-group behavior from runtime logic
     - Updated defaults to 3-5 members per cluster and 4 clusters
     - Added route-aware/sidewalk-filtered placement notes and idle-shift details
+
+- **2026-04-15**: Release/defaults and route-start exclusion update
+    - Changed default to `group_release_enable=False` for more stable clusters
+    - Added `group_route_start_exclusion_points` and `group_route_start_exclusion_radius`
+    - Added `spawn_increase_per_episode` for optional per-episode density growth
 

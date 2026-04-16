@@ -129,6 +129,14 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         return float(self.engine.global_config.get("group_route_min_separation", 5.5))
 
     @property
+    def _group_route_start_exclusion_points(self) -> int:
+        return max(0, int(self.engine.global_config.get("group_route_start_exclusion_points", 2)))
+
+    @property
+    def _group_route_start_exclusion_radius(self) -> float:
+        return max(0.0, float(self.engine.global_config.get("group_route_start_exclusion_radius", 6.0)))
+
+    @property
     def _group_release_enable(self) -> bool:
         return bool(self.engine.global_config.get("group_release_enable", True))
 
@@ -626,6 +634,11 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
         span = max(1e-3, max_r - min_r)
         templates = self._scene_anchor_templates(len(cluster_ids))
         min_sep = max(self._group_cluster_min_separation, self._group_route_min_separation)
+        start_exclusion_points = self._group_route_start_exclusion_points
+        start_exclusion_radius = self._group_route_start_exclusion_radius
+        route_start_anchor = None
+        if ego_path_points and len(ego_path_points) > 0:
+            route_start_anchor = np.array(ego_path_points[0], dtype=float)
 
         available = list(candidates)
         placed: Dict[int, np.ndarray] = {}
@@ -633,7 +646,12 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
 
         for i, cluster_id in enumerate(cluster_ids):
             if ego_path_points and len(ego_path_points) > 0:
-                path_idx = min(len(ego_path_points) - 1, int(i * max(1, len(ego_path_points)) / max(1, len(cluster_ids))))
+                valid_start_idx = min(len(ego_path_points) - 1, start_exclusion_points)
+                valid_len = max(1, len(ego_path_points) - valid_start_idx)
+                path_idx = valid_start_idx + min(
+                    valid_len - 1,
+                    int(i * valid_len / max(1, len(cluster_ids))),
+                )
                 desired = np.array(ego_path_points[path_idx], dtype=float)
             else:
                 angle_deg, ratio = templates[i]
@@ -647,6 +665,10 @@ class SocialScenarioManager(PGBackgroundSidewalkAssetsManager):
                 d_ego = float(np.linalg.norm(cand - ego_pos))
                 if d_ego < min_r or d_ego > max_r:
                     continue
+                if route_start_anchor is not None:
+                    d_start = float(np.linalg.norm(cand - route_start_anchor))
+                    if d_start < start_exclusion_radius:
+                        continue
                 if any(float(np.linalg.norm(cand - c)) < min_sep for c in chosen):
                     continue
                 score = float(np.linalg.norm(cand - desired))
