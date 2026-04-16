@@ -2,7 +2,7 @@ import argparse
 import copy
 import os
 from typing import Any
-
+from datetime import datetime
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
@@ -219,12 +219,12 @@ def parse_args():
     parser.add_argument("--total_timesteps", type=int, default=300_000)
     parser.add_argument("--n_envs", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--eval_freq", type=int, default=20_000)
+    parser.add_argument("--eval_freq", type=int, default=20_000) # 100000
     parser.add_argument("--checkpoint_freq", type=int, default=20_000)
     parser.add_argument("--log_dir", type=str, default="./midterm_logs/SAC_image_state")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a .zip model to resume")
-    parser.add_argument("--image_width", type=int, default=160)
-    parser.add_argument("--image_height", type=int, default=120)
+    parser.add_argument("--image_width", type=int, default=80)
+    parser.add_argument("--image_height", type=int, default=60)
     parser.add_argument("--buffer_size", type=int, default=100_000)
     parser.add_argument("--learning_starts", type=int, default=5_000)
     parser.add_argument("--batch_size", type=int, default=128)
@@ -238,16 +238,18 @@ def parse_args():
 def _get_sac_env_overrides() -> dict:
     return dict(
         no_negative_reward=False,
-        driving_reward=3.0,
-        success_reward=15.0,
+        driving_reward=1.5,
+        success_reward=30.0,
         speed_reward=1.0,
         lateral_penalty=0.5,
         crash_vehicle_penalty=1.0,
-        crash_object_penalty=1.0,
-        crash_human_penalty=1.0,
+        crash_object_penalty=3.0,
+        crash_human_penalty=3.0,
         crash_building_penalty=1.0,
-        out_of_road_penalty=2.0,
+        out_of_road_penalty=4.0,
         steering_range_penalty=0.5,
+
+        crash_object_done=True,
     )
 
 
@@ -395,7 +397,7 @@ def main():
     args = parse_args()
     set_random_seed(args.seed)
 
-    run_name = f"sac_imgstate_seed{args.seed}"
+    run_name = f"sac_imgstate_seed{args.seed}_{datetime.now().strftime('%m%d_%H%M')}"
     log_dir = os.path.join(args.log_dir, run_name)
     os.makedirs(log_dir, exist_ok=True)
 
