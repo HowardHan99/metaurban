@@ -11,29 +11,16 @@ import torch
 from transformers import AutoProcessor
 
 try:
-    # from transformers import Qwen2_5_VLForConditionalGeneration
-    from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
-except Exception as e:
-    raise ImportError(
-        "Failed to import Qwen2_5_VLForConditionalGeneration. Install a recent transformers build."
-    ) from e
-
-try:
     from qwen_vl_utils import process_vision_info
 except Exception as e:
     raise ImportError(
         "Failed to import qwen_vl_utils.process_vision_info. Please install qwen-vl-utils."
     ) from e
 
+from transformers import Qwen3VLForConditionalGeneration
 
-# DEFAULT_MODEL = "Qwen/Qwen2-VL-2B-Instruct"  # or "Qwen/Qwen2.5-VL-7B-Instruct" Qwen/Qwen2-VL-2B-Instruct
-
-from transformers import Qwen3VLForConditionalGeneration, AutoModelForImageTextToText
 
 DEFAULT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
-# transformers>=4.57.0
-
-
 
 EGO_DIM = 9
 EGO_NAMES = [
@@ -47,6 +34,13 @@ EGO_NAMES = [
     "yaw_rate_norm",
     "lateral_offset_norm",
 ]
+
+LABEL_TO_ID = {
+    "NEGATIVE_SOCIAL": 0,
+    "NEUTRAL": 1,
+    "POSITIVE_SOCIAL": 2,
+}
+ID_TO_LABEL = {v: k for k, v in LABEL_TO_ID.items()}
 
 SYSTEM_PROMPT = (
     "You are a strict classifier for socially appropriate sidewalk driving. "
@@ -76,66 +70,82 @@ Inputs:
 IMPORTANT:
 - You ONLY evaluate SOCIAL behavior.
 - DO NOT judge physical safety, collisions, or control stability.
-- Focus on pedestrians, human interactions, and social space.
-- Use the image as the main source of evidence.
-- Use ego state and action only as supporting context for how the agent is moving relative to people.
-- In uncertain scenes, stay conservative.
+- Focus only on pedestrians, human interactions, and social space.
+
+Core principle:
+- The image is the PRIMARY evidence for detecting pedestrians, groups, interpersonal spacing, and social interaction.
+- Ego state and action are SECONDARY and only describe how the agent is moving relative to what is visible in the image.
+
+How to use ego state and action (motion interpretation ONLY):
+- Use speed_norm, throttle_or_brake, and previous actions to judge whether the agent is slowing down, yielding, or continuing forward.
+- Use steering_norm, current steer, and yaw_rate_norm to judge whether the agent is turning away, detouring around people, or cutting into their space.
+- Use dist_to_left_side, dist_to_right_side, lateral_offset_norm, and heading_diff to judge whether the agent is adjusting its path or leaving extra space while passing.
+
+Strict constraints:
+- Do NOT infer pedestrians, groups, or social interaction from ego state or action alone.
+- If the image does NOT clearly show pedestrians or meaningful human social context, you MUST output NEUTRAL.
+- Ego state and action may ONLY be used to interpret motion relative to people already visible in the image.
+- If image evidence and motion evidence conflict, ALWAYS trust the image more.
+- In uncertain cases, be conservative and prefer NEUTRAL or NEGATIVE over POSITIVE.
 
 Your task:
 Classify the CURRENT step using exactly ONE label from this closed set:
 
 - POSITIVE_SOCIAL:
-  The behavior shows clear social awareness, politeness, or consideration.
+  The behavior shows clear social awareness and consideration.
+  Requires BOTH:
+  1. Visible pedestrians or social context in the image, AND
+  2. Motion consistent with yielding, detouring, or leaving space.
   Examples:
   - going around pedestrians or groups
-  - leaving extra space for people
-  - yielding or slowing down appropriately for people
-  - clearly respecting human interaction space
+  - clearly leaving extra space
+  - slowing down appropriately near people
 
 - NEUTRAL:
   There is NO clear social signal.
-  This includes:
-  - no pedestrians in the image
-  - pedestrians are far away and not affected by the agent
-  - no visible human interaction or meaningful social situation
-  - behavior is neither clearly considerate nor clearly intrusive
+  Use this when:
+  - no pedestrians are visible
+  - pedestrians are far away and unaffected
+  - no clear interaction or social situation exists
+  - motion changes (turning, slowing) are not clearly related to people
 
 - NEGATIVE_SOCIAL:
-  The behavior is socially inappropriate, intrusive, or uncomfortable.
+  The behavior is socially inappropriate or intrusive.
+  Requires BOTH:
+  1. Visible pedestrians or interaction space in the image, AND
+  2. Motion consistent with intrusion or insufficient yielding.
   Examples:
-  - passing between people who are close to each other
-  - cutting through a group of pedestrians
-  - getting too close to people
-  - moving into personal or interaction space
-  - not yielding when the social context clearly suggests it should
+  - passing between people who are close together
+  - cutting through a group
+  - moving too close to pedestrians
+  - not yielding in a clearly social situation
 
 Critical social rules (VERY IMPORTANT):
-- If there are NO pedestrians or no meaningful human social context:
+- If there are NO pedestrians or meaningful social context:
   -> You MUST output NEUTRAL
-  -> Do NOT hallucinate social issues or positive social behavior
+  -> Do NOT hallucinate social behavior
 
-- If multiple pedestrians are facing each other and appear to be interacting
-  (e.g., standing in a group, talking, forming a circle or cluster):
-  -> passing through the middle is NEGATIVE_SOCIAL
-  -> going around them or clearly leaving space can be POSITIVE_SOCIAL
+- If multiple pedestrians appear to be interacting (facing each other, standing in a group):
+  -> passing through them is NEGATIVE_SOCIAL
+  -> going around them or leaving space can be POSITIVE_SOCIAL
 
-- Passing between people who are close to each other is NEGATIVE_SOCIAL.
+- Passing between people who are close together is NEGATIVE_SOCIAL.
 
-- The agent should respect invisible social spaces and avoid breaking interpersonal interaction zones.
+- The agent must respect invisible interpersonal spaces.
 
 - If unsure whether people are interacting:
-  -> assume they ARE interacting (conservative judgment)
+  -> assume they ARE interacting (conservative rule)
 
-- Only output POSITIVE_SOCIAL if there is CLEAR evidence of socially considerate behavior.
+- Only output POSITIVE_SOCIAL when there is CLEAR evidence.
   Do NOT give positive labels easily.
 
 - If both positive and negative cues exist:
   -> choose NEGATIVE_SOCIAL
 
-Reward mapping rule (used later in storage, not for you to output directly):
-- POSITIVE_SOCIAL -> +1.0
-- NEUTRAL -> 0.0
-- NEGATIVE_SOCIAL -> -1.0
+Label id mapping (used later in storage, not for you to output directly):
+- NEGATIVE_SOCIAL -> 0
+- NEUTRAL -> 1
+- POSITIVE_SOCIAL -> 2
 
 Ego state:
 {ego_state_text}
@@ -146,7 +156,6 @@ Current action:
 Return JSON with exactly this schema:
 {{
   "label": "POSITIVE_SOCIAL or NEUTRAL or NEGATIVE_SOCIAL",
-  "confidence": <float in [0,1]>,
   "summary": "<one short sentence>"
 }}
 """.strip()
@@ -167,11 +176,11 @@ class StepRecord:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Label simulator steps with Qwen-VL using image + ego state + action for 3-level social reward."
+        description="Label simulator steps with Qwen-VL using image + ego state + action for 3-class social label dataset."
     )
     parser.add_argument("--img-dir", type=str, default="./recorded_dataset/rgb")
     parser.add_argument("--data-dir", type=str, default="./recorded_dataset/data")
-    parser.add_argument("--out-dir", type=str, default="./recorded_dataset/reward")
+    parser.add_argument("--out-dir", type=str, default="./recorded_dataset/label")
     parser.add_argument("--model-name", type=str, default=DEFAULT_MODEL)
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "float16", "bfloat16", "float32"])
     parser.add_argument("--max-new-tokens", type=int, default=256)
@@ -289,14 +298,9 @@ def clamp_float(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, float(x)))
 
 
-def classify_to_reward(label: str) -> float:
+def classify_to_label_id(label: str) -> int:
     label = str(label).strip().upper()
-    reward_table = {
-        "POSITIVE_SOCIAL": 1.0,
-        "NEUTRAL": 0.0,
-        "NEGATIVE_SOCIAL": -1.0,
-    }
-    return reward_table.get(label, 0.0)
+    return LABEL_TO_ID.get(label, LABEL_TO_ID["NEUTRAL"])
 
 
 def sanitize_result(result: Dict) -> Dict:
@@ -304,12 +308,12 @@ def sanitize_result(result: Dict) -> Dict:
     valid_labels = {"POSITIVE_SOCIAL", "NEUTRAL", "NEGATIVE_SOCIAL"}
     if label not in valid_labels:
         label = "NEUTRAL"
-    reward = classify_to_reward(label)
+
+    label_id = classify_to_label_id(label)
+
     return {
         "label": label,
-        "reward": reward,
-        "confidence": clamp_float(result.get("confidence", 0.0), 0.0, 1.0),
-        "summary": str(result.get("summary", ""))[:300],
+        "label_id": label_id,
     }
 
 
@@ -361,12 +365,16 @@ def run_one(
 
 def maybe_save_merged_npy(step: StepRecord, out_dir: Path, label_payload: Dict):
     original = np.load(step.npy_path, allow_pickle=True).item()
-    original["vlm_reward"] = label_payload["reward"]
-    original["vlm_label_class"] = label_payload["label"]
-    original["vlm_label"] = label_payload
+
+    new_data = {
+        "state": original["state"],
+        "action": original["action"],
+        "label": label_payload["label_id"],
+    }
+
     merged_path = out_dir / "merged_npy" / step.npy_path.name
     merged_path.parent.mkdir(parents=True, exist_ok=True)
-    np.save(merged_path, original, allow_pickle=True)
+    np.save(merged_path, new_data, allow_pickle=True)
 
 
 def main():
@@ -394,25 +402,22 @@ def main():
         raise RuntimeError("No matching step_XXXXXX.png / step_XXXXXX.npy pairs found.")
 
     torch_dtype = resolve_dtype(args.dtype)
-    model_kwargs = {
+    _ = {
         "device_map": "auto",
         "torch_dtype": "auto" if torch_dtype == "auto" else torch_dtype,
     }
 
-    # model = Qwen2VLForConditionalGeneration.from_pretrained(
-    #     args.model_name,
-    #     **model_kwargs,
-    # )
-    # model = AutoModelForImageTextToText.from_pretrained(args.model_name, **model_kwargs)
     model = Qwen3VLForConditionalGeneration.from_pretrained(
-        args.model_name, dtype="auto", device_map="auto"
+        args.model_name,
+        dtype="auto",
+        device_map="auto",
     )
     processor = AutoProcessor.from_pretrained(args.model_name)
 
-    jsonl_path = out_dir / "vlm_rewards.jsonl"
-    csv_path = out_dir / "vlm_rewards.csv"
-    reward_npy_path = out_dir / "reward_array.npy"
-    ego_npy_path = out_dir / "ego_state_array.npy"
+    jsonl_path = out_dir / "vlm_labels.jsonl"
+    csv_path = out_dir / "vlm_labels.csv"
+    label_npy_path = out_dir / "label_array.npy"
+    # ego_npy_path = out_dir / "ego_state_array.npy"
     prompt_dump_path = out_dir / "prompt_used.txt"
 
     results: List[Dict] = []
@@ -468,11 +473,7 @@ def main():
                 },
                 "action": step.action.tolist(),
                 "vlm_label_class": result["label"],
-                "vlm_reward": result["reward"],
-                "confidence": result["confidence"],
-                "summary": result["summary"],
-                "raw_model_output": raw_text,
-                "prompt_text": prompt_text,
+                "vlm_label_id": result["label_id"],
             }
 
             jf.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -490,25 +491,23 @@ def main():
                 print(
                     f"[{idx:06d}] "
                     f"label={result['label']} "
-                    f"reward={result['reward']:.4f} "
-                    f"conf={result['confidence']:.3f} :: "
+                    f"label_id={result['label_id']} "
                     f"{result['summary']}"
                 )
 
     results_sorted = sorted(results, key=lambda x: int(x["idx"]))
-    reward_array = np.asarray([float(r["vlm_reward"]) for r in results_sorted], dtype=np.float32)
-    ego_array = np.asarray([r["ego_state"] for r in results_sorted], dtype=np.float32)
+    label_array = np.asarray([int(r["vlm_label_id"]) for r in results_sorted], dtype=np.int64)
+    # ego_array = np.asarray([r["ego_state"] for r in results_sorted], dtype=np.float32)
 
-    np.save(reward_npy_path, reward_array)
-    np.save(ego_npy_path, ego_array)
+    np.save(label_npy_path, label_array)
+    # np.save(ego_npy_path, ego_array)
 
     with open(csv_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
             "idx",
             "vlm_label_class",
-            "vlm_reward",
-            "confidence",
+            "vlm_label_id",
             "original_env_reward",
             "terminal",
             "trunc",
@@ -520,8 +519,7 @@ def main():
             writer.writerow([
                 row["idx"],
                 row["vlm_label_class"],
-                row["vlm_reward"],
-                row["confidence"],
+                row["vlm_label_id"],
                 row["original_env_reward"],
                 row["terminal"],
                 row["trunc"],
@@ -534,9 +532,9 @@ def main():
 
     print(f"Done. Saved JSONL to: {jsonl_path}")
     print(f"Saved CSV to:   {csv_path}")
-    print(f"Saved rewards:  {reward_npy_path}")
-    print(f"Saved ego arr:  {ego_npy_path}")
-    print(f"Saved prompt:   {prompt_dump_path}")
+    print(f"Saved labels:  {label_npy_path}")
+    # print(f"Saved ego arr: {ego_npy_path}")
+    print(f"Saved prompt:  {prompt_dump_path}")
 
 
 if __name__ == "__main__":

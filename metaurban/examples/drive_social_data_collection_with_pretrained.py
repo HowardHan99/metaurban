@@ -118,7 +118,7 @@ def parse_args():
     p.add_argument("--map", type=str, default="C")
     p.add_argument("--horizon", type=int, default=300)
     p.add_argument("--num-scenarios", type=int, default=100)
-    p.add_argument("--object-density", type=float, default=0.7)
+    p.add_argument("--object-density", type=float, default=0.01)
 
     p.add_argument(
         "--scene-type",
@@ -139,8 +139,8 @@ def parse_args():
     p.add_argument("--group-cluster-size-min", type=int, default=3)
     p.add_argument("--group-cluster-size-max", type=int, default=5)
     p.add_argument("--group-spawn-near-ego", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--group-spawn-min-radius", type=float, default=6.0)
-    p.add_argument("--group-spawn-max-radius", type=float, default=11.0)
+    p.add_argument("--group-spawn-min-radius", type=float, default=12.0)
+    p.add_argument("--group-spawn-max-radius", type=float, default=20.0)
     p.add_argument("--group-route-min-ego-distance", type=float, default=8.0)
     p.add_argument("--group-route-min-separation", type=float, default=5.5)
     p.add_argument("--group-member-radius", type=float, default=1.45)
