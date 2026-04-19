@@ -113,7 +113,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--policy-path", type=str, default="./pretrained_policy_576k")
     p.add_argument("--seed", type=int, default=20)
-    p.add_argument("--max-steps", type=int, default=500)
+    p.add_argument("--max-steps", type=int, default=5000)
 
     p.add_argument("--map", type=str, default="C")
     p.add_argument("--horizon", type=int, default=300)
@@ -139,7 +139,7 @@ def parse_args():
     p.add_argument("--group-cluster-size-min", type=int, default=3)
     p.add_argument("--group-cluster-size-max", type=int, default=5)
     p.add_argument("--group-spawn-near-ego", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--group-spawn-min-radius", type=float, default=12.0)
+    p.add_argument("--group-spawn-min-radius", type=float, default=15.0)
     p.add_argument("--group-spawn-max-radius", type=float, default=20.0)
     p.add_argument("--group-route-min-ego-distance", type=float, default=8.0)
     p.add_argument("--group-route-min-separation", type=float, default=5.5)
@@ -162,7 +162,7 @@ def parse_args():
     p.add_argument("--spawn-human-num", type=int, default=40)
     p.add_argument("--spawn-elderly-num", type=int, default=0)
     p.add_argument("--ignore-success-done", action=argparse.BooleanOptionalAction, default=False)
-    p.add_argument("--spawn-robot-on-sidewalk", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--spawn-robot-on-sidewalk", action=argparse.BooleanOptionalAction, default=False)
 
     p.add_argument("--save-dir", type=str, default="./recorded_dataset")
     p.add_argument("--save-merged-npy", action=argparse.BooleanOptionalAction, default=True)
@@ -290,10 +290,26 @@ def main():
             o = o_next
 
             if tm or tc:
-                o, _ = env.reset(
+                base_seed = (
                     ((env.current_seed + 1) % config["num_scenarios"])
                     + env.engine.global_config["start_seed"]
                 )
+
+                reset_ok = False
+                for retry in range(10):
+                    trial_seed = base_seed + retry
+                    try:
+                        o, _ = env.reset(seed=trial_seed)
+                        if args.verbose:
+                            print(f"[reset] success with seed={trial_seed}")
+                        reset_ok = True
+                        break
+                    except Exception as e:
+                        print(f"[WARN] reset failed with seed={trial_seed}: {e}")
+
+                if not reset_ok:
+                    print("[WARN] all reset retries failed, stopping collection.")
+                    break
 
     finally:
         env.close()

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs -r kill -TERM)",
+      "Bash(ps -p 497324 -o pid,cmd)",
+      "Bash(ps -p 498806 -o pid,etime,%cpu,cmd)",
+      "Bash(python -c ' *)",
+      "Bash(awk 'NR>=22' /home/howardhan/metaurban/final/final_logs/MBPO/mbpo_seed0/eval_log.jsonl)",
+      "Bash(kill -TERM 498806)",
+      "Read(//tmp/**)",
+      "Bash(ln -s /home/howardhan/metaurban/final/final_logs/MBPO/mbpo_seed0_run5_idle_collapse/checkpoints/buffers_step_200000 /home/howardhan/metaurban/final/final_logs/MBPO/mbpo_seed0/checkpoints/buffers_step_200000)",
+      "Bash(disown sleep *)",
+      "Bash(nohup python *)",
+      "Bash(disown)"
+    ]
+  }
+}

@@ -26,7 +26,7 @@ def build_config(args):
         use_render=True,
         walk_on_all_regions=False,
         map=args.map,
-        manual_control=True,
+        manual_control=False,
         drivable_area_extension=55,
         height_scale=1,
         show_mid_block_map=False,
@@ -102,7 +102,7 @@ def parse_args():
     p.add_argument("--map", type=str, default="C")
     p.add_argument("--horizon", type=int, default=300)
     p.add_argument("--num-scenarios", type=int, default=100)
-    p.add_argument("--object-density", type=float, default=0.2)
+    p.add_argument("--object-density", type=float, default=0.01)
 
     p.add_argument("--scene-type", type=str, default="default",
                    choices=["default", "commercial", "commute", "leisure", "constrained"])
@@ -115,13 +115,13 @@ def parse_args():
     p.add_argument("--group-cluster-size-min", type=int, default=3)
     p.add_argument("--group-cluster-size-max", type=int, default=5)
     p.add_argument("--group-spawn-near-ego", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--group-spawn-min-radius", type=float, default=6.0)
-    p.add_argument("--group-spawn-max-radius", type=float, default=11.0)
+    p.add_argument("--group-spawn-min-radius", type=float, default=12.0)
+    p.add_argument("--group-spawn-max-radius", type=float, default=18.0)
     p.add_argument("--group-route-min-ego-distance", type=float, default=8.0)
     p.add_argument("--group-route-min-separation", type=float, default=5.5)
     p.add_argument("--group-route-start-exclusion-points", type=int, default=2)
     p.add_argument("--group-route-start-exclusion-radius", type=float, default=6.0)
-    p.add_argument("--group-member-radius", type=float, default=1.45)
+    p.add_argument("--group-member-radius", type=float, default=1.6)
     p.add_argument("--group-member-ring-step", type=float, default=0.62)
     p.add_argument("--group-member-radius-jitter", type=float, default=0.16)
     p.add_argument("--group-member-ring-step-jitter", type=float, default=0.12)
