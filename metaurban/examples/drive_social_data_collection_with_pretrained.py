@@ -168,7 +168,7 @@ def parse_args():
     p.add_argument("--save-merged-npy", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True)
 
-    p.add_argument("--image-scale", type=float, default=0.5)
+    p.add_argument("--image-scale", type=float, default=0.125) # 0.125 for 1024x576 -> 128x72
 
     return p.parse_args()
 

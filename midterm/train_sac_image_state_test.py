@@ -223,8 +223,8 @@ def parse_args():
     parser.add_argument("--checkpoint_freq", type=int, default=20_000)
     parser.add_argument("--log_dir", type=str, default="./midterm_logs/SAC_image_state")
     parser.add_argument("--resume_from", type=str, default=None, help="Path to a .zip model to resume")
-    parser.add_argument("--image_width", type=int, default=80)
-    parser.add_argument("--image_height", type=int, default=60)
+    parser.add_argument("--image_width", type=int, default=80) # 128 72
+    parser.add_argument("--image_height", type=int, default=60) # 128 72
     parser.add_argument("--buffer_size", type=int, default=100_000)
     parser.add_argument("--learning_starts", type=int, default=5_000)
     parser.add_argument("--batch_size", type=int, default=128)
@@ -264,9 +264,9 @@ def build_image_state_env_config(image_width: int, image_height: int, training: 
             agent_observation=ThreeSourceMixObservation,
             interface_panel=[],
             sensors=dict(
-                rgb_camera=(RGBCamera, image_width, image_height),
-                depth_camera=(DepthCamera, 84, 84),
-                semantic_camera=(SemanticCamera, 84, 84),
+                rgb_camera=(RGBCamera, image_width, image_height), # 128 72
+                depth_camera=(DepthCamera, 84, 84), # 128 72
+                semantic_camera=(SemanticCamera, 84, 84), # 128 72
             ),
         )
     )
@@ -325,8 +325,6 @@ def inspect_vec_obs(obs, prefix="obs"):
 
 def build_train_and_eval_envs(args):
     train_cfg = build_image_state_env_config(args.image_width, args.image_height, training=True)
-
-    # 先和 train 保持一致，避免 training=False 的 reset 路径出问题
     eval_cfg = build_image_state_env_config(args.image_width, args.image_height, training=True)
 
     train_seeds = [args.seed + i for i in range(args.n_envs)]
