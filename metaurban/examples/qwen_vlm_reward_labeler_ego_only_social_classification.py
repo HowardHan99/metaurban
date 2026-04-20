@@ -424,10 +424,9 @@ def main():
 
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         args.model_name,
-        torch_dtype=torch.float16,
-        # dtype="auto",
-        # device_map="auto",
-    ).cuda()
+        dtype="auto",
+        device_map="auto",
+    )
     processor = AutoProcessor.from_pretrained(args.model_name)
 
     jsonl_path = out_dir / "vlm_labels.jsonl"
