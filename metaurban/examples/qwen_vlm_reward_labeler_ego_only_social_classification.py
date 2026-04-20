@@ -88,6 +88,10 @@ Strict constraints:
 - If image evidence and motion evidence conflict, ALWAYS trust the image more.
 - In uncertain cases, be conservative and prefer NEUTRAL or NEGATIVE over POSITIVE.
 
+Rules for has_pedestrian:
+- Set has_pedestrian to true only if one or more pedestrians are clearly visible in the image.
+- Set has_pedestrian to false if no pedestrian is clearly visible.
+
 Your task:
 Classify the CURRENT step using exactly ONE label from this closed set:
 
@@ -156,7 +160,8 @@ Current action:
 Return JSON with exactly this schema:
 {{
   "label": "POSITIVE_SOCIAL or NEUTRAL or NEGATIVE_SOCIAL",
-  "summary": "<one short sentence>"
+  "has_pedestrian": true,
+  "reason": "<one short sentence explaining why this label was chosen>"
 }}
 """.strip()
 
@@ -178,8 +183,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Label simulator steps with Qwen-VL using image + ego state + action for 3-class social label dataset."
     )
-    parser.add_argument("--img-dir", type=str, default="./recorded_dataset/rgb")
-    parser.add_argument("--data-dir", type=str, default="./recorded_dataset/data")
+    parser.add_argument("--img-dir", type=str, default="./recorded_dataset/rgb_merged")
+    parser.add_argument("--data-dir", type=str, default="./recorded_dataset/data_merged")
     parser.add_argument("--out-dir", type=str, default="./recorded_dataset/label")
     parser.add_argument("--model-name", type=str, default=DEFAULT_MODEL)
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "float16", "bfloat16", "float32"])
@@ -311,9 +316,19 @@ def sanitize_result(result: Dict) -> Dict:
 
     label_id = classify_to_label_id(label)
 
+    has_pedestrian = result.get("has_pedestrian", False)
+    if isinstance(has_pedestrian, str):
+        has_pedestrian = has_pedestrian.strip().lower() in {"true", "1", "yes"}
+    else:
+        has_pedestrian = bool(has_pedestrian)
+
+    reason = str(result.get("reason", "")).strip()
+
     return {
         "label": label,
         "label_id": label_id,
+        "has_pedestrian": has_pedestrian,
+        "reason": reason,
     }
 
 
@@ -409,9 +424,10 @@ def main():
 
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         args.model_name,
-        dtype="auto",
-        device_map="auto",
-    )
+        torch_dtype=torch.float16,
+        # dtype="auto",
+        # device_map="auto",
+    ).cuda()
     processor = AutoProcessor.from_pretrained(args.model_name)
 
     jsonl_path = out_dir / "vlm_labels.jsonl"
@@ -435,6 +451,14 @@ def main():
 
     pending_pairs = [p for p in pairs if p[0] not in done]
 
+    # if args.verbose:
+    #     print(
+    #         f"[{idx:06d}] "
+    #         f"label={result['label']} "
+    #         f"label_id={result['label_id']} "
+    #         f"has_pedestrian={result['has_pedestrian']} "
+    #         f"reason={result['reason']}"
+    #     )
     if args.verbose:
         print(f"Found {len(pairs)} pairs, {len(pending_pairs)} pending, {len(done)} already done.")
 
@@ -474,6 +498,8 @@ def main():
                 "action": step.action.tolist(),
                 "vlm_label_class": result["label"],
                 "vlm_label_id": result["label_id"],
+                "has_pedestrian": result["has_pedestrian"],
+                "reason": result["reason"],
             }
 
             jf.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -487,13 +513,15 @@ def main():
             if args.save_merged_npy:
                 maybe_save_merged_npy(step, out_dir, result)
 
-            if args.verbose:
-                print(
-                    f"[{idx:06d}] "
-                    f"label={result['label']} "
-                    f"label_id={result['label_id']} "
-                    f"{result['summary']}"
-                )
+        if args.verbose:
+            print(
+                f"[{idx:06d}] "
+                f"label={result['label']} "
+                f"label_id={result['label_id']} "
+                f"has_pedestrian={result['has_pedestrian']} "
+                f"reason={result['reason']}"
+                # f"{result['summary']}"
+            )
 
     results_sorted = sorted(results, key=lambda x: int(x["idx"]))
     label_array = np.asarray([int(r["vlm_label_id"]) for r in results_sorted], dtype=np.int64)
@@ -508,24 +536,27 @@ def main():
             "idx",
             "vlm_label_class",
             "vlm_label_id",
+            "has_pedestrian",
+            "reason",
             "original_env_reward",
             "terminal",
             "trunc",
             "image_path",
             "npy_path",
-            "summary",
         ])
         for row in results_sorted:
             writer.writerow([
                 row["idx"],
                 row["vlm_label_class"],
                 row["vlm_label_id"],
+                row["has_pedestrian"],
+                row["reason"],
                 row["original_env_reward"],
                 row["terminal"],
                 row["trunc"],
                 row["image_path"],
                 row["npy_path"],
-                row["summary"],
+                # row["summary"],
             ])
 
     prompt_dump_path.write_text(prompt_template, encoding="utf-8")

@@ -47,7 +47,7 @@ if __name__ == "__main__":
         walk_on_all_regions=False,
         use_render=True,
         map=map_type,
-        manual_control=False, # False True
+        manual_control=True, # False True
         default_expert=False,
         drivable_area_extension=55,
         height_scale=1,

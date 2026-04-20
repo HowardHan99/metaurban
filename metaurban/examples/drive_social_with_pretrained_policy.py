@@ -88,7 +88,7 @@ def build_config(args):
         spawn_edog_num=0,
         spawn_erobot_num=0,
         spawn_drobot_num=0,
-        max_actor_num=20,
+        max_actor_num=30,
         ignore_success_done=args.ignore_success_done,
     )
 
@@ -96,7 +96,7 @@ def build_config(args):
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--policy-path", type=str, default="./pretrained_policy_576k")
-    p.add_argument("--seed", type=int, default=20)
+    p.add_argument("--seed", type=int, default=20) # 20
     p.add_argument("--max-steps", type=int, default=2000)
 
     p.add_argument("--map", type=str, default="C")
@@ -109,8 +109,8 @@ def parse_args():
     p.add_argument("--scene-building-source", type=str, default="default",
                    choices=["scene", "default"])
 
-    p.add_argument("--crossing-ped-num", type=int, default=6)
-    p.add_argument("--vulnerable-ped-num", type=int, default=8)
+    p.add_argument("--crossing-ped-num", type=int, default=2)
+    p.add_argument("--vulnerable-ped-num", type=int, default=2)
     p.add_argument("--group-cluster-num", type=int, default=4)
     p.add_argument("--group-cluster-size-min", type=int, default=3)
     p.add_argument("--group-cluster-size-max", type=int, default=5)
@@ -137,7 +137,7 @@ def parse_args():
     p.add_argument("--vulnerable-distracted-ratio", type=float, default=0.4)
     p.add_argument("--vulnerable-pause-prob", type=float, default=0.02)
     p.add_argument("--vulnerable-pause-steps-mean", type=int, default=16)
-    p.add_argument("--spawn-human-num", type=int, default=40)
+    p.add_argument("--spawn-human-num", type=int, default=50)
     p.add_argument("--spawn-increase-per-episode", type=int, default=0,
                    help="Increase spawn_human_num by this amount after each reset (0=no increase)")
     p.add_argument("--spawn-elderly-num", type=int, default=0)

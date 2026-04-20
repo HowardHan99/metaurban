@@ -2,10 +2,6 @@ import argparse
 import os
 import cv2
 import numpy as np
-import torch
-import gymnasium as gym
-from stable_baselines3.ppo.ppo import PPO
-from stable_baselines3.common.save_util import load_from_zip_file
 
 from metaurban.constants import HELP_MESSAGE
 from metaurban.envs.social_dynamic_env import SocialDynamicMetaUrbanEnv
@@ -15,14 +11,6 @@ from metaurban.component.sensors.depth_camera import DepthCamera
 from metaurban.component.sensors.semantic_camera import SemanticCamera
 from metaurban.obs.mix_obs import ThreeSourceMixObservation
 
-class StateOnlyObservationWrapper(gym.ObservationWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        assert isinstance(env.observation_space, gym.spaces.Dict)
-        self.observation_space = env.observation_space["state"]
-
-    def observation(self, observation):
-        return observation["state"]
 
 def build_config(args):
     den_scale = 1
@@ -30,9 +18,9 @@ def build_config(args):
         crswalk_density=1,
         object_density=args.object_density,
         walk_on_all_regions=False,
-        use_render=False,
+        use_render=True,
         map=args.map,
-        manual_control=False,
+        manual_control=True,
         default_expert=False,
         drivable_area_extension=55,
         height_scale=1,
@@ -59,7 +47,6 @@ def build_config(args):
             enable_reverse=True,
             policy_reverse=False,
         ),
-
 
         image_observation=True,
         sensors=dict(
@@ -103,7 +90,7 @@ def build_config(args):
         spawn_edog_num=0,
         spawn_erobot_num=0,
         spawn_drobot_num=0,
-        max_actor_num=50,
+        max_actor_num=args.max_actor_num,
         ignore_success_done=args.ignore_success_done,
         spawn_robot_on_sidewalk=args.spawn_robot_on_sidewalk,
     )
@@ -111,9 +98,8 @@ def build_config(args):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--policy-path", type=str, default="./pretrained_policy_576k")
     p.add_argument("--seed", type=int, default=20)
-    p.add_argument("--max-steps", type=int, default=1000)
+    p.add_argument("--max-steps", type=int, default=5000)
 
     p.add_argument("--map", type=str, default="C")
     p.add_argument("--horizon", type=int, default=300)
@@ -135,22 +121,22 @@ def parse_args():
 
     p.add_argument("--crossing-ped-num", type=int, default=2)
     p.add_argument("--vulnerable-ped-num", type=int, default=2)
-    p.add_argument("--group-cluster-num", type=int, default=2)
-    p.add_argument("--group-cluster-size-min", type=int, default=4)
+    p.add_argument("--group-cluster-num", type=int, default=4)
+    p.add_argument("--group-cluster-size-min", type=int, default=3)
     p.add_argument("--group-cluster-size-max", type=int, default=5)
     p.add_argument("--group-spawn-near-ego", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--group-spawn-min-radius", type=float, default=15.0)
-    p.add_argument("--group-spawn-max-radius", type=float, default=20.0)
+    p.add_argument("--group-spawn-min-radius", type=float, default=12.0)
+    p.add_argument("--group-spawn-max-radius", type=float, default=18.0)
     p.add_argument("--group-route-min-ego-distance", type=float, default=8.0)
     p.add_argument("--group-route-min-separation", type=float, default=5.5)
-    p.add_argument("--group-member-radius", type=float, default=2.0)
+    p.add_argument("--group-member-radius", type=float, default=1.45)
     p.add_argument("--group-member-ring-step", type=float, default=0.62)
     p.add_argument("--group-member-radius-jitter", type=float, default=0.16)
     p.add_argument("--group-member-ring-step-jitter", type=float, default=0.12)
     p.add_argument("--group-member-idle-shift-prob", type=float, default=0.015)
     p.add_argument("--group-member-idle-shift-steps-mean", type=int, default=18)
     p.add_argument("--group-member-idle-shift-radius", type=float, default=0.22)
-    p.add_argument("--group-release-enable", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--group-release-enable", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--group-release-steps-mean", type=int, default=180)
     p.add_argument("--group-release-steps-std", type=int, default=40)
     p.add_argument("--group-release-steps-min", type=int, default=60)
@@ -159,8 +145,9 @@ def parse_args():
     p.add_argument("--vulnerable-distracted-ratio", type=float, default=0.4)
     p.add_argument("--vulnerable-pause-prob", type=float, default=0.02)
     p.add_argument("--vulnerable-pause-steps-mean", type=int, default=16)
-    p.add_argument("--spawn-human-num", type=int, default=50)
+    p.add_argument("--spawn-human-num", type=int, default=40)
     p.add_argument("--spawn-elderly-num", type=int, default=0)
+    p.add_argument("--max-actor-num", type=int, default=30)
     p.add_argument("--ignore-success-done", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--spawn-robot-on-sidewalk", action=argparse.BooleanOptionalAction, default=False)
 
@@ -168,7 +155,8 @@ def parse_args():
     p.add_argument("--save-merged-npy", action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True)
 
-    p.add_argument("--image-scale", type=float, default=0.125) # 0.125 for 1024x576 -> 128x72
+    p.add_argument("--image-scale", type=float, default=0.125)
+    p.add_argument("--save-every", type=int, default=1)
 
     return p.parse_args()
 
@@ -195,6 +183,69 @@ def extract_rgb_from_obs(o, scale=1.0):
     return rgb
 
 
+def next_reset_obs(env, config, verbose=False):
+    base_seed = (
+        ((env.current_seed + 1) % config["num_scenarios"])
+        + env.engine.global_config["start_seed"]
+    )
+
+    for retry in range(10):
+        trial_seed = base_seed + retry
+        try:
+            obs, info = env.reset(seed=trial_seed)
+            if verbose:
+                print(f"[reset] success with seed={trial_seed}")
+            return obs, info
+        except Exception as e:
+            print(f"[WARN] reset failed with seed={trial_seed}: {e}")
+
+    raise RuntimeError("All reset retries failed.")
+
+
+def save_sample(save_idx, o, o_next, r, tm, tc, info, img_dir, data_dir, image_scale, save_merged_npy):
+    rgb = extract_rgb_from_obs(o, scale=image_scale)
+    cv2.imwrite(
+        os.path.join(img_dir, f"step_{save_idx:06d}.png"),
+        rgb
+    )
+
+    state_to_save = o["state"] if isinstance(o, dict) and "state" in o else o
+
+    if "action" in info:
+        action_to_save = info["action"]
+    else:
+        action_to_save = [0.0, 0.0]
+
+    np.save(
+        os.path.join(data_dir, f"step_{save_idx:06d}.npy"),
+        {
+            "state": state_to_save,
+            "action": action_to_save,
+            "reward": r,
+            "terminal": tm,
+            "trunc": tc,
+            "info": info,
+        },
+        allow_pickle=True
+    )
+
+    if save_merged_npy:
+        next_state_to_save = o_next["state"] if isinstance(o_next, dict) and "state" in o_next else o_next
+        np.save(
+            os.path.join(data_dir, f"step_{save_idx:06d}_merged.npy"),
+            {
+                "state": state_to_save,
+                "next_state": next_state_to_save,
+                "action": action_to_save,
+                "reward": r,
+                "terminal": tm,
+                "trunc": tc,
+                "info": info,
+            },
+            allow_pickle=True
+        )
+
+
 def main():
     args = parse_args()
     config = build_config(args)
@@ -208,107 +259,53 @@ def main():
     os.makedirs(img_dir, exist_ok=True)
     os.makedirs(data_dir, exist_ok=True)
 
-    algo_config = dict(
-        learning_rate=5e-5,
-        n_steps=200,
-        batch_size=256,
-        n_epochs=10,
-        vf_coef=1.0,
-        max_grad_norm=10.0,
-        verbose=1,
-        seed=0,
-        ent_coef=0.0,
-        tensorboard_log="./metaurban_ppo-single_scenario_per_process_1e8-tb_logs/",
-    )
-
-    policy_env = StateOnlyObservationWrapper(env)
-    expert = PPO("MlpPolicy", policy_env, device="cpu",**algo_config)
-    _, params, _ = load_from_zip_file(args.policy_path, device="cpu", load_data=False)
-    expert.set_parameters(params, exact_match=True, device="cpu")
-
-    global_steps = 0
+    env_steps = 0
+    save_steps = 0
 
     try:
         print(HELP_MESSAGE)
+        print("manual_control=True is enabled.")
+        print("Use the environment's built-in keyboard controls.")
+        print("This script only handles saving data.")
 
-        for _ in range(args.max_steps):
-            obs_for_policy = o["state"] if isinstance(o, dict) and "state" in o else o
-            obs_np = np.asarray(obs_for_policy, dtype=np.float32)
+        while env_steps < args.max_steps:
+            # Placeholder action.
+            # The environment's built-in manual control is expected to override / consume keyboard input.
+            dummy_action = [0.0, 0.0]
 
-            action = expert.predict(
-                torch.from_numpy(obs_np).reshape(1, -1),
-                deterministic=True
-            )[0]
-            action = np.clip(action, a_min=-1.0, a_max=1.0)
-            action = action[0].tolist()
+            o_next, r, tm, tc, info = env.step(dummy_action)
 
-            o_next, r, tm, tc, info = env.step(action)
-
-            rgb = extract_rgb_from_obs(o, scale=args.image_scale)
-            cv2.imwrite(
-                os.path.join(img_dir, f"step_{global_steps:06d}.png"),
-                rgb
-                # cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-            )
-
-            action_to_save = info["action"] if ("action" in info) else action
-            state_to_save = o["state"] if isinstance(o, dict) and "state" in o else o
-
-            np.save(
-                os.path.join(data_dir, f"step_{global_steps:06d}.npy"),
-                {
-                    "state": state_to_save,
-                    "action": action_to_save,
-                    "reward": r,
-                    "terminal": tm,
-                    "trunc": tc,
-                    "info": info,
-                },
-                allow_pickle=True
-            )
-
-            if args.save_merged_npy:
-                next_state_to_save = o_next["state"] if isinstance(o_next, dict) and "state" in o_next else o_next
-                np.save(
-                    os.path.join(data_dir, f"step_{global_steps:06d}_merged.npy"),
-                    {
-                        "state": state_to_save,
-                        "next_state": next_state_to_save,
-                        "action": action_to_save,
-                        "reward": r,
-                        "terminal": tm,
-                        "trunc": tc,
-                        "info": info,
-                    },
-                    allow_pickle=True
+            if env_steps % args.save_every == 0:
+                save_sample(
+                    save_idx=save_steps,
+                    o=o,
+                    o_next=o_next,
+                    r=r,
+                    tm=tm,
+                    tc=tc,
+                    info=info,
+                    img_dir=img_dir,
+                    data_dir=data_dir,
+                    image_scale=args.image_scale,
+                    save_merged_npy=args.save_merged_npy,
                 )
 
-            if args.verbose and global_steps % 20 == 0:
-                print(f"[step] global_steps={global_steps} reward={r:.4f} tm={tm} tc={tc}")
+                if args.verbose and save_steps % 20 == 0:
+                    print(
+                        f"[save] save_steps={save_steps} env_steps={env_steps} "
+                        f"reward={r:.4f} tm={tm} tc={tc}"
+                    )
 
-            global_steps += 1
+                save_steps += 1
+
+            env_steps += 1
             o = o_next
 
             if tm or tc:
-                base_seed = (
-                    ((env.current_seed + 1) % config["num_scenarios"])
-                    + env.engine.global_config["start_seed"]
-                )
-
-                reset_ok = False
-                for retry in range(10):
-                    trial_seed = base_seed + retry
-                    try:
-                        o, _ = env.reset(seed=trial_seed)
-                        if args.verbose:
-                            print(f"[reset] success with seed={trial_seed}")
-                        reset_ok = True
-                        break
-                    except Exception as e:
-                        print(f"[WARN] reset failed with seed={trial_seed}: {e}")
-
-                if not reset_ok:
-                    print("[WARN] all reset retries failed, stopping collection.")
+                try:
+                    o, _ = next_reset_obs(env, config, verbose=args.verbose)
+                except Exception as e:
+                    print(f"[WARN] auto reset failed: {e}")
                     break
 
     finally:
