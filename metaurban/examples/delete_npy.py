@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
 
-img_dir = Path("./recorded_dataset/rgb")
-npy_dir = Path("./recorded_dataset/data")
+img_dir = Path("./recorded_dataset/rgb_merged")
+npy_dir = Path("./recorded_dataset/data_merged")
 
 img_ids = set()
 
