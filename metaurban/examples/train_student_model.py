@@ -117,7 +117,7 @@ def parse_args():
     p.add_argument("--out-dir", type=str, default=None)
     p.add_argument("--image-width", type=int, default=128)
     p.add_argument("--image-height", type=int, default=72)
-    p.add_argument("--batch-size", type=int, default=16)
+    p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--weight-decay", type=float, default=1e-4)

@@ -125,15 +125,47 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
 
         return config
 
-    def reset(self, seed=None):
+    # def reset(self, seed=None):
+    #     """Override reset to optionally place agent on sidewalk after standard reset."""
+    #     # Dynamically increase spawn_human_num based on episode count if configured
+    #     spawn_increase = self.config.get("spawn_increase_per_episode", 0)
+    #     if spawn_increase > 0:
+    #         # Save base spawn value on first reset
+    #         if not hasattr(self, "_base_spawn_human_num"):
+    #             self._base_spawn_human_num = self.config.get("spawn_human_num", 40)
+            
+    #         reset_count = getattr(self, "_reset_count", 0)
+    #         base_spawn = self._base_spawn_human_num
+    #         dynamic_spawn = base_spawn + reset_count * spawn_increase
+    #         self.config["spawn_human_num"] = int(dynamic_spawn)
+    #         logger.info(
+    #             f"Episode {reset_count}: dynamically set spawn_human_num={int(dynamic_spawn)} "
+    #             f"(base={base_spawn} + {reset_count}*{spawn_increase})"
+    #         )
+    #         self._reset_count = reset_count + 1
+    #     else:
+    #         if not hasattr(self, "_reset_count"):
+    #             self._reset_count = 0
+
+    #     obs, info = super().reset(seed=seed)
+
+    #     # If enabled, move agent to sidewalk after reset
+    #     if self.config.get("spawn_robot_on_sidewalk", False):
+    #         try:
+    #             self._place_agent_on_sidewalk()
+    #         except Exception:
+    #             # If sidewalk placement fails, keep agent at default spawn
+    #             logger.exception("Failed to place ego on sidewalk; fallback to default spawn")
+
+    #     return obs, info
+
+    def reset(self, seed=None, options=None, **kwargs):
         """Override reset to optionally place agent on sidewalk after standard reset."""
-        # Dynamically increase spawn_human_num based on episode count if configured
         spawn_increase = self.config.get("spawn_increase_per_episode", 0)
         if spawn_increase > 0:
-            # Save base spawn value on first reset
             if not hasattr(self, "_base_spawn_human_num"):
                 self._base_spawn_human_num = self.config.get("spawn_human_num", 40)
-            
+
             reset_count = getattr(self, "_reset_count", 0)
             base_spawn = self._base_spawn_human_num
             dynamic_spawn = base_spawn + reset_count * spawn_increase
@@ -147,17 +179,17 @@ class SocialDynamicMetaUrbanEnv(SidewalkDynamicMetaUrbanEnv):
             if not hasattr(self, "_reset_count"):
                 self._reset_count = 0
 
-        obs, info = super().reset(seed=seed)
+        # swallow Gymnasium's options here
+        obs, info = super().reset(seed=seed, **kwargs)
 
-        # If enabled, move agent to sidewalk after reset
         if self.config.get("spawn_robot_on_sidewalk", False):
             try:
                 self._place_agent_on_sidewalk()
             except Exception:
-                # If sidewalk placement fails, keep agent at default spawn
                 logger.exception("Failed to place ego on sidewalk; fallback to default spawn")
 
         return obs, info
+
 
     def _place_agent_on_sidewalk(self):
         """Place the ego near pedestrian anchors, which are already on sidewalk regions."""
