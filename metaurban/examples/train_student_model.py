@@ -5,7 +5,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
-
+from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
@@ -110,23 +110,23 @@ class FusionStudentNet(nn.Module):
 
 def parse_args():
     p = argparse.ArgumentParser(description="Train student model: image + ego_state + action -> label")
-    p.add_argument("--image-dir", type=str, default="./recorded_dataset/rgb",
+    p.add_argument("--image-dir", type=str, default="./recorded_dataset/final_rgb_merged",
                    help="Directory containing step_XXXXXX.png")
-    p.add_argument("--label-dir", type=str, default="./recorded_dataset/label/merged_npy",
+    p.add_argument("--label-dir", type=str, default="./recorded_dataset/new_labels/final_merged_npy",
                    help="Directory containing labeled step_XXXXXX.npy with keys: state, action, label")
-    p.add_argument("--out-dir", type=str, default="./student_runs/image_ego_action_student_128x72")
+    p.add_argument("--out-dir", type=str, default=None)
     p.add_argument("--image-width", type=int, default=128)
     p.add_argument("--image-height", type=int, default=72)
-    p.add_argument("--batch-size", type=int, default=64)
+    p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--test-size", type=float, default=0.15)
-    p.add_argument("--val-size", type=float, default=0.15)
+    p.add_argument("--test-size", type=float, default=0.2)
+    p.add_argument("--val-size", type=float, default=0.1)
     p.add_argument("--num-workers", type=int, default=0)
-    p.add_argument("--early-stop-patience", type=int, default=8)
+    p.add_argument("--early-stop-patience", type=int, default=10)
     p.add_argument("--pretrained-backbone", action="store_true", default=True)
     p.add_argument("--freeze-backbone", action="store_true", default=False)
     return p.parse_args()
@@ -346,7 +346,11 @@ def main():
 
     image_dir = Path(args.image_dir)
     label_dir = Path(args.label_dir)
-    out_dir = Path(args.out_dir)
+    if args.out_dir is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = Path(f"./recorded_dataset/student_runs/{timestamp}")
+    else:
+        out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     samples = find_samples(image_dir=image_dir, label_dir=label_dir)
