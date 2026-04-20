@@ -1,7 +1,7 @@
 import json
 from collections import Counter
 
-path = "./recorded_dataset/label/vlm_labels.jsonl"
+path = "./recorded_dataset/new_labels/vlm_labels.jsonl"
 
 counter = Counter()
 total = 0
@@ -11,8 +11,8 @@ with open(path, "r") as f:
         data = json.loads(line)
         
         label = data["vlm_label_id"]
-        if label == 2:
-            print(data["image_path"], data["reason"])
+        # if label == 2:
+        #     print(data["image_path"], data["reason"])
         counter[label] += 1
         total += 1
 

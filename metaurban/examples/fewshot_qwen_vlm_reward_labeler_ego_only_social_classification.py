@@ -298,10 +298,10 @@ def build_messages(
                 {"type": "text", "text": """
         Ego state:
         - yaw_rate_norm: 0.054
-        - lateral_offset_norm: 0.49
+        - lateral_offset_norm: 0.25
 
         Action:
-        - steer: 0.043
+        - steer: 0.04
         - throttle: 0.96
 
         Description:
@@ -331,15 +331,15 @@ def build_messages(
                 {"type": "image", "image": str(few_shot_pos_image)},
                 {"type": "text", "text": """
         Ego state:
-        - yaw_rate_norm: 0.30
-        - lateral_offset_norm: 0.55
+        - yaw_rate_norm: 0.45
+        - lateral_offset_norm: 0.35
 
         Action:
-        - steer: 0.60
-        - throttle: 0.20
+        - steer: 0.55
+        - throttle: 0.40
 
         Description:
-        Pedestrians are visible. The agent is turning and moving away, leaving space.
+        Pedestrians or groups are visible. The agent is turning and moving away, leaving space.
         """}
             ],
         },
