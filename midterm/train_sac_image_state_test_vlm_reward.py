@@ -1,7 +1,7 @@
 import argparse
 import os
-from typing import Any
 from datetime import datetime
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -21,7 +21,7 @@ from stable_baselines3.common.callbacks import (
 )
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv
 
 from metaurban.component.sensors.depth_camera import DepthCamera
 from metaurban.component.sensors.rgb_camera import RGBCamera
@@ -33,6 +33,95 @@ from env_config import EVAL_VEC_ENV_SEEDS
 
 
 LABEL_NAMES = ["NEGATIVE_SOCIAL", "NEUTRAL", "POSITIVE_SOCIAL"]
+_PLANNING_PATCHED = False
+
+
+def _to_xy(x: Any) -> np.ndarray:
+    arr = np.asarray(x, dtype=np.float32).reshape(-1)
+    if arr.size >= 2:
+        return arr[:2]
+    if arr.size == 1:
+        return np.array([arr[0], 0.0], dtype=np.float32)
+    return np.array([0.0, 0.0], dtype=np.float32)
+
+
+def patch_planning_fallback() -> None:
+    global _PLANNING_PATCHED
+    if _PLANNING_PATCHED:
+        return
+
+    try:
+        import metaurban.policy.get_planning as gp
+    except Exception as e:
+        print(f"[WARN] cannot import metaurban.policy.get_planning: {e}")
+        return
+
+    try:
+        import metaurban.manager.humanoid_manager as hm
+    except Exception as e:
+        print(f"[WARN] cannot import metaurban.manager.humanoid_manager: {e}")
+        hm = None
+
+    try:
+        import metaurban.component.navigation_module.orca_navigation as onav
+    except Exception as e:
+        print(f"[WARN] cannot import orca_navigation: {e}")
+        onav = None
+
+    old_get_planning = gp.get_planning
+
+    def safe_get_planning(*args, **kwargs):
+        try:
+            return old_get_planning(*args, **kwargs)
+        except ValueError as e:
+            if "need at least one array to stack" not in str(e):
+                raise
+
+            print("[WARN] get_planning failed with empty nexts, using fallback straight-line planning")
+
+            if len(args) < 3:
+                raise
+
+            start_positions_list = args[0]
+            goals_list = args[2]
+            n_agents = min(len(start_positions_list), len(goals_list))
+
+            time_length_all = []
+            points_all = []
+            speed_all = []
+            early_stop_all = []
+
+            for i in range(n_agents):
+                start_xy = _to_xy(start_positions_list[i])
+                goal_xy = _to_xy(goals_list[i])
+
+                n_points = 20
+                xs = np.linspace(start_xy[0], goal_xy[0], n_points, dtype=np.float32)
+                ys = np.linspace(start_xy[1], goal_xy[1], n_points, dtype=np.float32)
+
+                points = [np.array([x, y], dtype=np.float32) for x, y in zip(xs, ys)]
+
+                seg = np.stack([xs, ys], axis=1)
+                seg_len = np.linalg.norm(np.diff(seg, axis=0), axis=1)
+                total_len = float(seg_len.sum()) if len(seg_len) > 0 else 0.0
+
+                time_length_all.append([[total_len]])
+                points_all.append(points)
+                speed_all.append([[1.0]])
+                early_stop_all.append([[]])
+
+            return time_length_all, points_all, speed_all, early_stop_all
+
+    gp.get_planning = safe_get_planning
+
+    if hm is not None:
+        hm.get_planning = safe_get_planning
+
+    if onav is not None:
+        onav.get_planning = safe_get_planning
+
+    _PLANNING_PATCHED = True
+    print("[INFO] planning fallback patch installed")
 
 
 class VLMRewardLoggerCallback(BaseCallback):
@@ -105,35 +194,33 @@ class VLMRewardLoggerCallback(BaseCallback):
 
 
 class IdlePenaltyWrapper(gym.Wrapper):
-    """Penalize the agent for standing still / braking to zero speed."""
-
     def __init__(self, env: gym.Env, penalty: float = 0.1, speed_threshold: float = 0.5):
         super().__init__(env)
         self.penalty = float(penalty)
         self.speed_threshold = float(speed_threshold)
 
     def reset(self, *, seed=None, options=None, **kwargs):
-        return self.env.reset(seed=seed, **kwargs)
+        return self.env.reset(seed=seed, options=options, **kwargs)
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
+
+        speed = None
         try:
-            speed = self.env.unwrapped.vehicle.speed_km_h
+            speed = self.env.unwrapped.agent.speed_km_h
         except AttributeError:
-            speed = None
+            try:
+                speed = self.env.unwrapped.vehicle.speed_km_h
+            except AttributeError:
+                speed = None
+
         if speed is not None and speed < self.speed_threshold:
             reward -= self.penalty
+
         return obs, reward, terminated, truncated, info
 
 
 class CleanDictObsWrapper(gym.Wrapper):
-    """
-    Convert MetaUrban raw dict obs into a clean Dict observation for SB3:
-      - image: uint8 RGB, shape (H, W, 3)
-      - state: float32 vector
-    Drops depth/semantic from the policy input.
-    """
-
     def __init__(self, env: gym.Env, image_width: int, image_height: int):
         super().__init__(env)
         raw_space = self.env.observation_space
@@ -191,9 +278,9 @@ class CleanDictObsWrapper(gym.Wrapper):
                 img = img.clip(0, 255).astype(np.uint8)
 
         if img.ndim != 3:
-            raise ValueError(f"Unexpected cleaned image ndim: {img.ndim}, shape={img.shape}")
+            raise ValueError(f"Unexpected image ndim: {img.ndim}, shape={img.shape}")
         if img.shape[2] < 3:
-            raise ValueError(f"Unexpected cleaned image channels: {img.shape}")
+            raise ValueError(f"Unexpected image channels: {img.shape}")
         if img.shape[2] > 3:
             img = img[:, :, :3]
 
@@ -278,12 +365,6 @@ class FusionStudentNet(nn.Module):
 
 
 class StudentRewardWrapper(gym.Wrapper):
-    """
-    Use trained student model:
-      image + ego state dims [7, 8] + action -> label -> reward
-    and add it to the base env reward.
-    """
-
     def __init__(
         self,
         env: gym.Env,
@@ -350,9 +431,9 @@ class StudentRewardWrapper(gym.Wrapper):
             return np.asarray(vals, dtype=np.float32)
 
         ego = np.zeros((self.ego_dim,), dtype=np.float32)
-        for idx in self.state_indices:
-            if idx < len(full_state) and idx < self.ego_dim:
-                ego[idx] = full_state[idx]
+        for src_i, idx in enumerate(self.state_indices):
+            if idx < len(full_state) and src_i < self.ego_dim:
+                ego[src_i] = full_state[idx]
         return ego
 
     def _prepare_action(self, action: np.ndarray) -> np.ndarray:
@@ -399,68 +480,18 @@ class StudentRewardWrapper(gym.Wrapper):
         return obs, total_reward, terminated, truncated, info
 
 
-def _to_xy(x: Any) -> np.ndarray:
-    arr = np.asarray(x, dtype=np.float32).reshape(-1)
-    if arr.size >= 2:
-        return arr[:2]
-    if arr.size == 1:
-        return np.array([arr[0], 0.0], dtype=np.float32)
-    return np.array([0.0, 0.0], dtype=np.float32)
+class SeededResetWrapper(gym.Wrapper):
+    def __init__(self, env, base_seed: int, num_scenarios: int):
+        super().__init__(env)
+        self.base_seed = int(base_seed)
+        self.num_scenarios = int(num_scenarios)
+        self.reset_count = 0
 
-
-def patch_orca_planning_fallback() -> None:
-    try:
-        import metaurban.policy.get_planning as gp
-    except Exception as e:
-        print(f"[WARN] Failed to import metaurban.policy.get_planning: {e}")
-        return
-
-    try:
-        import metaurban.component.navigation_module.orca_navigation as onav
-    except Exception as e:
-        print(f"[WARN] Failed to import orca_navigation: {e}")
-        onav = None
-
-    bind_obj = getattr(gp, "bind", None)
-    has_demo = hasattr(bind_obj, "demo") if bind_obj is not None else False
-    if has_demo:
-        return
-
-    def fallback_get_planning(*args, **kwargs):
-        if len(args) < 3:
-            raise ValueError("fallback_get_planning expects at least 3 positional args")
-
-        start_positions_list = args[0]
-        goals_list = args[2]
-        n_agents = min(len(start_positions_list), len(goals_list))
-
-        time_length_all = []
-        points_all = []
-        speed_all = []
-        early_stop_all = []
-
-        for i in range(n_agents):
-            start_xy = _to_xy(start_positions_list[i])
-            goal_xy = _to_xy(goals_list[i])
-
-            n_points = 60
-            xs = np.linspace(start_xy[0], goal_xy[0], n_points, dtype=np.float32)
-            ys = np.linspace(start_xy[1], goal_xy[1], n_points, dtype=np.float32)
-
-            points = [np.array([x, y], dtype=np.float32) for x, y in zip(xs, ys)]
-            seg_len = np.linalg.norm(np.diff(np.stack([xs, ys], axis=1), axis=0), axis=1)
-            total_len = float(seg_len.sum()) if len(seg_len) > 0 else 0.0
-
-            time_length_all.append([[total_len]])
-            points_all.append(points)
-            speed_all.append([[1.0]])
-            early_stop_all.append([[]])
-
-        return time_length_all, points_all, speed_all, early_stop_all
-
-    gp.get_planning = fallback_get_planning
-    if onav is not None:
-        onav.get_planning = fallback_get_planning
+    def reset(self, *, seed=None, options=None, **kwargs):
+        if seed is None:
+            seed = (self.base_seed + self.reset_count) % self.num_scenarios
+        self.reset_count += 1
+        return self.env.reset(seed=seed, options=options, **kwargs)
 
 
 def build_config(args):
@@ -561,13 +592,10 @@ def make_env(
     speed_threshold: float = 0.5,
 ):
     def _init():
-        patch_orca_planning_fallback()
+        patch_planning_fallback()
 
-        cfg = dict(env_cfg)
-        cfg["start_seed"] = int(seed)
-        cfg["log_level"] = 50
-
-        env = SocialDynamicMetaUrbanEnv(cfg)
+        env = SocialDynamicMetaUrbanEnv(env_cfg)
+        env = SeededResetWrapper(env, base_seed=seed, num_scenarios=env_cfg["num_scenarios"])
         env = CleanDictObsWrapper(env, image_width=image_width, image_height=image_height)
 
         env = StudentRewardWrapper(
@@ -590,85 +618,6 @@ def make_env(
     return _init
 
 
-def inspect_vec_obs(obs, prefix="obs"):
-    if isinstance(obs, dict):
-        print(f"[DEBUG] {prefix} keys: {list(obs.keys())}")
-        for k, v in obs.items():
-            arr = np.asarray(v)
-            print(f"[DEBUG] {prefix}[{k}] shape={arr.shape}, dtype={arr.dtype}")
-    else:
-        arr = np.asarray(obs)
-        print(f"[DEBUG] {prefix} shape={arr.shape}, dtype={arr.dtype}")
-
-
-def build_train_and_eval_envs(args):
-    train_cfg = build_config(args)
-    eval_cfg = build_config(args)
-
-    train_seeds = [args.seed + i for i in range(args.n_envs)]
-
-    if len(EVAL_VEC_ENV_SEEDS) > 0:
-        eval_seeds = [
-            int(EVAL_VEC_ENV_SEEDS[i % len(EVAL_VEC_ENV_SEEDS)]) + args.seed
-            for i in range(max(1, min(len(EVAL_VEC_ENV_SEEDS), args.n_envs)))
-        ]
-    else:
-        eval_seeds = [args.seed + 1000]
-
-    env_fns = [
-        make_env(
-            train_cfg,
-            seed=s,
-            image_width=args.image_width,
-            image_height=args.image_height,
-            student_model_path=args.student_model_path,
-            student_reward_scale=args.student_reward_scale,
-            student_negative_reward=args.student_negative_reward,
-            student_neutral_reward=args.student_neutral_reward,
-            student_positive_reward=args.student_positive_reward,
-            student_device=args.student_device,
-            use_idle_penalty=True,
-            idle_penalty=args.idle_penalty,
-            speed_threshold=args.speed_threshold,
-        )
-        for s in train_seeds
-    ]
-
-    eval_env_fns = [
-        make_env(
-            eval_cfg,
-            seed=s,
-            image_width=args.image_width,
-            image_height=args.image_height,
-            student_model_path=args.student_model_path,
-            student_reward_scale=args.student_reward_scale,
-            student_negative_reward=args.student_negative_reward,
-            student_neutral_reward=args.student_neutral_reward,
-            student_positive_reward=args.student_positive_reward,
-            student_device=args.student_device,
-            use_idle_penalty=False,
-            idle_penalty=args.idle_penalty,
-            speed_threshold=args.speed_threshold,
-        )
-        for s in eval_seeds
-    ]
-
-    if args.debug_reset:
-        print("[DEBUG] debug_reset=True, using DummyVecEnv for BOTH train and eval envs.")
-        env = DummyVecEnv(env_fns)
-        eval_env = DummyVecEnv(eval_env_fns)
-    else:
-        if args.n_envs == 1:
-            print("[DEBUG] n_envs=1, using DummyVecEnv for train env.")
-            env = DummyVecEnv(env_fns)
-        else:
-            env = SubprocVecEnv(env_fns)
-
-        eval_env = DummyVecEnv(eval_env_fns)
-
-    return env, eval_env, train_seeds, eval_seeds
-
-
 class SafeEvalCallback(EvalCallback):
     def _on_step(self) -> bool:
         try:
@@ -679,30 +628,23 @@ class SafeEvalCallback(EvalCallback):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train image+state SAC on MetaUrban")
+    parser = argparse.ArgumentParser(description="Train SAC on SocialDynamicMetaUrbanEnv in drive-social style")
 
     parser.add_argument("--total_timesteps", type=int, default=300000)
-    parser.add_argument("--n_envs", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--eval_freq", type=int, default=20_000)
-    parser.add_argument("--checkpoint_freq", type=int, default=20_000)
-    parser.add_argument("--log_dir", type=str, default="./midterm_logs/SAC_image_state")
-    parser.add_argument(
-        "--resume_from",
-        type=str,
-        default="./sac_imgstate_260000_steps.zip",
-        help="Path to a .zip model to resume",
-    )
+    parser.add_argument("--seed", type=int, default=20)
+    parser.add_argument("--eval_freq", type=int, default=20000)
+    parser.add_argument("--checkpoint_freq", type=int, default=20000)
+    parser.add_argument("--log_dir", type=str, default="./midterm_logs/SAC_image_state_drive_social")
+    parser.add_argument("--resume_from", type=str, default="./sac_imgstate_260000_steps.zip")
 
     parser.add_argument("--image_width", type=int, default=80)
     parser.add_argument("--image_height", type=int, default=60)
-    parser.add_argument("--buffer_size", type=int, default=100_000)
-    parser.add_argument("--learning_starts", type=int, default=5_000)
+    parser.add_argument("--buffer_size", type=int, default=100000)
+    parser.add_argument("--learning_starts", type=int, default=5000)
     parser.add_argument("--batch_size", type=int, default=128)
 
     parser.add_argument("--idle_penalty", type=float, default=0.1)
     parser.add_argument("--speed_threshold", type=float, default=0.3)
-    parser.add_argument("--debug_reset", action="store_true")
     parser.add_argument("--disable_eval", action="store_true")
 
     parser.add_argument(
@@ -710,7 +652,7 @@ def parse_args():
         type=str,
         default="/home/howardhan/metaurban/recorded_dataset/student_runs/20260420_170419/best_student_image_ego_action.pt",
     )
-    parser.add_argument("--student_reward_scale", type=float, default=0.05) # 02 1.0
+    parser.add_argument("--student_reward_scale", type=float, default=0.05)
     parser.add_argument("--student_negative_reward", type=float, default=-1.0)
     parser.add_argument("--student_neutral_reward", type=float, default=0.0)
     parser.add_argument("--student_positive_reward", type=float, default=1.0)
@@ -768,7 +710,7 @@ def main():
     args = parse_args()
     set_random_seed(args.seed)
 
-    run_name = f"sac_imgstate_seed{args.seed}_{datetime.now().strftime('%m%d_%H%M')}"
+    run_name = f"sac_drive_social_seed{args.seed}_{datetime.now().strftime('%m%d_%H%M')}"
     log_dir = os.path.join(args.log_dir, run_name)
     tb_log_dir = os.path.join(log_dir, "tb_logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -778,34 +720,62 @@ def main():
     eval_env = None
 
     try:
-        env, eval_env, train_seeds, eval_seeds = build_train_and_eval_envs(args)
+        train_cfg = build_config(args)
+        env = DummyVecEnv([
+            make_env(
+                train_cfg,
+                seed=args.seed,
+                image_width=args.image_width,
+                image_height=args.image_height,
+                student_model_path=args.student_model_path,
+                student_reward_scale=args.student_reward_scale,
+                student_negative_reward=args.student_negative_reward,
+                student_neutral_reward=args.student_neutral_reward,
+                student_positive_reward=args.student_positive_reward,
+                student_device=args.student_device,
+                use_idle_penalty=True,
+                idle_penalty=args.idle_penalty,
+                speed_threshold=args.speed_threshold,
+            )
+        ])
 
-        print(f"=== Training image+state SAC for {args.total_timesteps} steps with {args.n_envs} envs ===")
-        print(f"    image size: {args.image_width}x{args.image_height}")
-        print(f"    idle penalty: -{args.idle_penalty}/step when speed < {args.speed_threshold} km/h")
-        print(
-            f"    buffer={args.buffer_size} | learning_starts={args.learning_starts} | "
-            f"batch={args.batch_size} | gradient_steps=1"
-        )
-        print(f"    train_seeds: {train_seeds}")
-        print(f"    eval_seeds: {eval_seeds}")
-        print(f"    logs: {log_dir}")
-        print(f"    tensorboard: {tb_log_dir}")
+        if args.disable_eval:
+            eval_env = None
+            eval_seeds = []
+        else:
+            eval_seed = int(EVAL_VEC_ENV_SEEDS[0]) + args.seed if len(EVAL_VEC_ENV_SEEDS) > 0 else args.seed + 1000
+            eval_seed = eval_seed % args.num_scenarios
+            eval_cfg = build_config(args)
+            eval_env = DummyVecEnv([
+                make_env(
+                    eval_cfg,
+                    seed=eval_seed,
+                    image_width=args.image_width,
+                    image_height=args.image_height,
+                    student_model_path=args.student_model_path,
+                    student_reward_scale=args.student_reward_scale,
+                    student_negative_reward=args.student_negative_reward,
+                    student_neutral_reward=args.student_neutral_reward,
+                    student_positive_reward=args.student_positive_reward,
+                    student_device=args.student_device,
+                    use_idle_penalty=False,
+                    idle_penalty=args.idle_penalty,
+                    speed_threshold=args.speed_threshold,
+                )
+            ])
+            eval_seeds = [eval_seed]
 
-        print(f"[DEBUG] train obs space: {env.observation_space}")
-        print(f"[DEBUG] eval obs space:  {eval_env.observation_space}")
-        print(f"[DEBUG] action space:    {env.action_space}")
+        print(f"=== Training SAC for {args.total_timesteps} steps ===")
+        print(f"seed: {args.seed}")
+        print(f"image size: {args.image_width}x{args.image_height}")
+        print(f"log dir: {log_dir}")
+        print(f"tensorboard: {tb_log_dir}")
+        print(f"train obs space: {env.observation_space}")
+        print(f"action space: {env.action_space}")
+        if len(eval_seeds) > 0:
+            print(f"eval seeds: {eval_seeds}")
 
-        if args.debug_reset:
-            print("[DEBUG] Running one reset() on train env...")
-            train_obs = env.reset()
-            inspect_vec_obs(train_obs, prefix="train_reset_obs")
-
-            print("[DEBUG] Running one reset() on eval env...")
-            eval_obs = eval_env.reset()
-            inspect_vec_obs(eval_obs, prefix="eval_reset_obs")
-
-        if args.resume_from:
+        if args.resume_from and os.path.exists(args.resume_from):
             model = SAC.load(args.resume_from, env=env, device="auto", seed=args.seed)
             model.tensorboard_log = tb_log_dir
             print(f"Resumed SAC from {args.resume_from}")
@@ -829,28 +799,27 @@ def main():
             print("Created new SAC model.")
 
         checkpoint_cb = CheckpointCallback(
-            save_freq=max(args.checkpoint_freq // max(args.n_envs, 1), 1),
+            save_freq=max(args.checkpoint_freq, 1),
             save_path=os.path.join(log_dir, "checkpoints"),
             name_prefix="sac_imgstate",
         )
 
-        vlm_callback = VLMRewardLoggerCallback()
+        vlm_cb = VLMRewardLoggerCallback()
+        callback_list = [checkpoint_cb, vlm_cb]
 
-        callback_list = [checkpoint_cb, vlm_callback]
-
-        if args.disable_eval:
-            print("[INFO] EvalCallback disabled. Training will run without periodic evaluation.")
-        else:
+        if not args.disable_eval and eval_env is not None:
             eval_cb = SafeEvalCallback(
                 eval_env,
                 best_model_save_path=os.path.join(log_dir, "best_model"),
                 log_path=os.path.join(log_dir, "eval_logs"),
-                eval_freq=max(args.eval_freq // max(args.n_envs, 1), 1),
-                n_eval_episodes=max(1, len(eval_seeds)),
+                eval_freq=max(args.eval_freq, 1),
+                n_eval_episodes=1,
                 deterministic=True,
                 render=False,
             )
             callback_list.insert(1, eval_cb)
+        else:
+            print("[INFO] Eval disabled.")
 
         callbacks = CallbackList(callback_list)
 
@@ -858,11 +827,11 @@ def main():
             total_timesteps=args.total_timesteps,
             callback=callbacks,
             tb_log_name="SAC_image_state",
-            reset_num_timesteps=not bool(args.resume_from),
+            reset_num_timesteps=not (args.resume_from and os.path.exists(args.resume_from)),
         )
 
         model.save(os.path.join(log_dir, "final_model"))
-        print(f"=== SAC training complete. Model saved to {log_dir}/final_model.zip ===")
+        print(f"=== Training complete. Saved to {log_dir}/final_model.zip ===")
 
     finally:
         if eval_env is not None:

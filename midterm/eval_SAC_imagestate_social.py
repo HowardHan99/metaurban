@@ -392,7 +392,7 @@ def build_config(args):
     return dict(
         crswalk_density=1,
         object_density=args.object_density,
-        use_render=True,
+        use_render=False,
         walk_on_all_regions=False,
         map=args.map,
         manual_control=False,
@@ -697,10 +697,10 @@ def parse_args():
     )
 
     parser.add_argument("--checkpoint_dir", type=str,
-                        default="/home/howardhan/metaurban/midterm_logs/SAC_image_state/sac_imgstate_seed0_0420_1944/checkpoints")
+                        default="/home/howardhan/metaurban/midterm_logs/SAC_image_state_drive_social/sac_drive_social_seed20_0422_0930/checkpoints")
     parser.add_argument("--output_dir", type=str,
-                        default="/home/howardhan/metaurban/midterm_logs/SAC_image_state/sac_imgstate_seed0_0420_1944/checkpoints/eval_social_student")
-    parser.add_argument("--seeds", type=str, default="20,30,40,50",
+                        default="/home/howardhan/metaurban/midterm_logs/SAC_image_state_drive_social/sac_drive_social_seed20_0422_0930/checkpoints/eval_social_student")
+    parser.add_argument("--seeds", type=str, default="20,30,40,50,60,70,80,90,100",
                         help="Comma-separated list of seeds to evaluate")
     parser.add_argument("--image_width", type=int, default=80)
     parser.add_argument("--image_height", type=int, default=60)
@@ -711,7 +711,7 @@ def parse_args():
 
     parser.add_argument("--student_model_path", type=str,
                         default="/home/howardhan/metaurban/recorded_dataset/student_runs/20260420_170419/best_student_image_ego_action.pt")
-    parser.add_argument("--student_reward_scale", type=float, default=0.2)
+    parser.add_argument("--student_reward_scale", type=float, default=0.05)
     parser.add_argument("--student_negative_reward", type=float, default=-1.0)
     parser.add_argument("--student_neutral_reward", type=float, default=0.0)
     parser.add_argument("--student_positive_reward", type=float, default=1.0)
