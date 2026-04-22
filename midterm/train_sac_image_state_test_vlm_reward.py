@@ -1,7 +1,5 @@
 import argparse
-import copy
 import os
-from pathlib import Path
 from typing import Any
 from datetime import datetime
 
@@ -15,7 +13,12 @@ from torchvision import models, transforms
 
 from gymnasium import spaces
 from stable_baselines3 import SAC
-from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import (
+    BaseCallback,
+    CallbackList,
+    CheckpointCallback,
+    EvalCallback,
+)
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
@@ -26,37 +29,79 @@ from metaurban.component.sensors.semantic_camera import SemanticCamera
 from metaurban.obs.mix_obs import ThreeSourceMixObservation
 from metaurban.envs.social_dynamic_env import SocialDynamicMetaUrbanEnv
 
-from env_config import ENV_CONFIG, EVAL_VEC_ENV_SEEDS
+from env_config import EVAL_VEC_ENV_SEEDS
 
-from stable_baselines3.common.callbacks import BaseCallback
-import numpy as np
+
+LABEL_NAMES = ["NEGATIVE_SOCIAL", "NEUTRAL", "POSITIVE_SOCIAL"]
+
 
 class VLMRewardLoggerCallback(BaseCallback):
     def __init__(self):
         super().__init__()
         self.vlm_rewards = []
         self.base_rewards = []
+        self.total_rewards = []
+
+        self.ep_vlm = 0.0
+        self.ep_base = 0.0
+        self.ep_total = 0.0
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
+        rewards = self.locals.get("rewards", None)
+        dones = self.locals.get("dones", None)
 
-        for info in infos:
-            if "student_reward" in info:
-                self.vlm_rewards.append(info["student_reward"])
-                self.base_rewards.append(info["base_env_reward"])
+        for i, info in enumerate(infos):
+            if "student_reward" not in info:
+                continue
+
+            vlm_r = float(info["student_reward"])
+            base_r = float(info.get("base_env_reward", 0.0))
+
+            if rewards is not None:
+                total_r = float(rewards[i])
+            else:
+                total_r = vlm_r + base_r
+
+            self.logger.record("reward/vlm_step", vlm_r)
+            self.logger.record("reward/base_step", base_r)
+            self.logger.record("reward/total_step", total_r)
+
+            self.vlm_rewards.append(vlm_r)
+            self.base_rewards.append(base_r)
+            self.total_rewards.append(total_r)
+
+            self.ep_vlm += vlm_r
+            self.ep_base += base_r
+            self.ep_total += total_r
+
+            if dones is not None and dones[i]:
+                self.logger.record("reward/vlm_episode", self.ep_vlm)
+                self.logger.record("reward/base_episode", self.ep_base)
+                self.logger.record("reward/total_episode", self.ep_total)
+
+                self.ep_vlm = 0.0
+                self.ep_base = 0.0
+                self.ep_total = 0.0
 
         return True
 
     def _on_rollout_end(self):
         if len(self.vlm_rewards) > 0:
-            self.logger.record("reward/vlm_reward_mean", np.mean(self.vlm_rewards))
-            self.logger.record("reward/base_reward_mean", np.mean(self.base_rewards))
-            self.logger.record("reward/total_reward_mean",
-                   np.mean(np.array(self.vlm_rewards) + np.array(self.base_rewards)))
+            self.logger.record("reward/vlm_reward_mean", float(np.mean(self.vlm_rewards)))
+            self.logger.record("reward/base_reward_mean", float(np.mean(self.base_rewards)))
+            self.logger.record("reward/total_reward_mean", float(np.mean(self.total_rewards)))
 
-            # reset buffer
+            self.logger.record("reward/vlm_reward_min", float(np.min(self.vlm_rewards)))
+            self.logger.record("reward/vlm_reward_max", float(np.max(self.vlm_rewards)))
+            self.logger.record("reward/base_reward_min", float(np.min(self.base_rewards)))
+            self.logger.record("reward/base_reward_max", float(np.max(self.base_rewards)))
+            self.logger.record("reward/total_reward_min", float(np.min(self.total_rewards)))
+            self.logger.record("reward/total_reward_max", float(np.max(self.total_rewards)))
+
             self.vlm_rewards = []
             self.base_rewards = []
+            self.total_rewards = []
 
 
 class IdlePenaltyWrapper(gym.Wrapper):
@@ -68,7 +113,6 @@ class IdlePenaltyWrapper(gym.Wrapper):
         self.speed_threshold = float(speed_threshold)
 
     def reset(self, *, seed=None, options=None, **kwargs):
-        # MetaUrban BaseEnv.reset() does not support Gymnasium's `options`
         return self.env.reset(seed=seed, **kwargs)
 
     def step(self, action):
@@ -184,9 +228,6 @@ class CleanDictObsWrapper(gym.Wrapper):
         return self._extract_clean_obs(raw_obs), reward, terminated, truncated, info
 
 
-LABEL_NAMES = ["NEGATIVE_SOCIAL", "NEUTRAL", "POSITIVE_SOCIAL"]
-
-
 class FusionStudentNet(nn.Module):
     def __init__(
         self,
@@ -239,7 +280,7 @@ class FusionStudentNet(nn.Module):
 class StudentRewardWrapper(gym.Wrapper):
     """
     Use trained student model:
-      image (128x72) + ego state dims [7, 8] + action -> label -> reward
+      image + ego state dims [7, 8] + action -> label -> reward
     and add it to the base env reward.
     """
 
@@ -302,14 +343,12 @@ class StudentRewardWrapper(gym.Wrapper):
     def _build_ego_input(self, full_state: np.ndarray) -> np.ndarray:
         full_state = np.asarray(full_state, dtype=np.float32).reshape(-1)
 
-        # If the student was trained with ego_dim=2, use exactly state[7], state[8].
         if self.ego_dim == len(self.state_indices):
             vals = []
             for idx in self.state_indices:
                 vals.append(full_state[idx] if idx < len(full_state) else 0.0)
             return np.asarray(vals, dtype=np.float32)
 
-        # If the student was trained with ego_dim=9, keep a 9D vector but only fill dims 7 and 8.
         ego = np.zeros((self.ego_dim,), dtype=np.float32)
         for idx in self.state_indices:
             if idx < len(full_state) and idx < self.ego_dim:
@@ -370,10 +409,6 @@ def _to_xy(x: Any) -> np.ndarray:
 
 
 def patch_orca_planning_fallback() -> None:
-    """
-    Patch MetaUrban ORCA planning so reset() does not crash when bind.demo is missing.
-    Must run inside each worker process before env.reset().
-    """
     try:
         import metaurban.policy.get_planning as gp
     except Exception as e:
@@ -428,93 +463,86 @@ def patch_orca_planning_fallback() -> None:
         onav.get_planning = fallback_get_planning
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Train image+state SAC on MetaUrban")
-    parser.add_argument("--total_timesteps", type=int, default=200000)
-    parser.add_argument("--n_envs", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--eval_freq", type=int, default=20_000) # 100000
-    parser.add_argument("--checkpoint_freq", type=int, default=20_000)
-    parser.add_argument("--log_dir", type=str, default="./midterm_logs/SAC_image_state")
-    parser.add_argument("--resume_from", type=str, default="./sac_imgstate_260000_steps.zip", help="Path to a .zip modelto resume") # /home/howardhan/metaurban/sac_imgstate_260000_steps.zip
-    parser.add_argument("--image_width", type=int, default=80) # 128 72
-    parser.add_argument("--image_height", type=int, default=60) # 128 72
-    parser.add_argument("--buffer_size", type=int, default=100_000)
-    parser.add_argument("--learning_starts", type=int, default=5_000)
-    parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--idle_penalty", type=float, default=0.1)
-    parser.add_argument("--speed_threshold", type=float, default=0.5)
-    parser.add_argument("--debug_reset", action="store_true", help="Run a reset() on train/eval env before training.")
-    parser.add_argument("--disable_eval", action="store_true", help="Disable EvalCallback to avoid eval_env reset crashes.")
-    parser.add_argument("--student_model_path", type=str, default="/home/howardhan/metaurban/recorded_dataset/student_runs/20260420_170419/best_student_image_ego_action.pt", help="Path to trained student model checkpoint .pt file")
-    parser.add_argument("--student_reward_scale", type=float, default=2.0)
-    parser.add_argument("--student_negative_reward", type=float, default=-1.0)
-    parser.add_argument("--student_neutral_reward", type=float, default=0.0)
-    parser.add_argument("--student_positive_reward", type=float, default=1.0)
-    parser.add_argument("--student_device", type=str, default="auto")
-    return parser.parse_args()
-
-
-def _get_sac_env_overrides() -> dict:
+def build_config(args):
+    den_scale = 1
     return dict(
-        no_negative_reward=False,
-        driving_reward=1.5,
-        success_reward=40.0,
-        speed_reward=0.5,# 1.0
-        lateral_penalty=0.5,
-        crash_vehicle_penalty=1.0,
-        crash_object_penalty=3.0,
-        crash_human_penalty=3.0,
-        crash_building_penalty=1.0,
-        out_of_road_penalty=4.0,
-        steering_range_penalty=0.5,
-
-        crash_object_done=False,
+        crswalk_density=1,
+        object_density=args.object_density,
+        use_render=False,
+        walk_on_all_regions=False,
+        map=args.map,
+        manual_control=False,
+        drivable_area_extension=55,
+        height_scale=1,
+        show_mid_block_map=False,
+        show_ego_navigation=False,
+        debug=False,
+        horizon=args.horizon,
+        on_continuous_line_done=False,
+        out_of_route_done=True,
+        relax_out_of_road_done=True,
+        max_lateral_dist=15.0,
+        show_sidewalk=True,
+        show_crosswalk=True,
+        random_spawn_lane_index=False,
+        num_scenarios=args.num_scenarios,
+        accident_prob=0,
+        window_size=(1200, 900),
+        vehicle_config=dict(
+            show_lidar=False,
+            show_navi_mark=False,
+            show_line_to_navi_mark=False,
+            show_dest_mark=False,
+            enable_reverse=True,
+            policy_reverse=False,
+        ),
+        scene_type=args.scene_type,
+        scene_building_source=args.scene_building_source,
+        crossing_ped_num=args.crossing_ped_num,
+        vulnerable_ped_num=args.vulnerable_ped_num,
+        group_cluster_num=args.group_cluster_num,
+        group_cluster_size_min=args.group_cluster_size_min,
+        group_cluster_size_max=args.group_cluster_size_max,
+        group_spawn_near_ego=args.group_spawn_near_ego,
+        group_spawn_min_radius=args.group_spawn_min_radius,
+        group_spawn_max_radius=args.group_spawn_max_radius,
+        group_route_min_ego_distance=args.group_route_min_ego_distance,
+        group_route_min_separation=args.group_route_min_separation,
+        group_route_start_exclusion_points=args.group_route_start_exclusion_points,
+        group_route_start_exclusion_radius=args.group_route_start_exclusion_radius,
+        group_member_radius=args.group_member_radius,
+        group_member_ring_step=args.group_member_ring_step,
+        group_member_radius_jitter=args.group_member_radius_jitter,
+        group_member_ring_step_jitter=args.group_member_ring_step_jitter,
+        group_member_idle_shift_prob=args.group_member_idle_shift_prob,
+        group_member_idle_shift_steps_mean=args.group_member_idle_shift_steps_mean,
+        group_member_idle_shift_radius=args.group_member_idle_shift_radius,
+        group_release_enable=args.group_release_enable,
+        group_release_steps_mean=args.group_release_steps_mean,
+        group_release_steps_std=args.group_release_steps_std,
+        group_release_steps_min=args.group_release_steps_min,
+        vulnerable_elderly_ratio=args.vulnerable_elderly_ratio,
+        vulnerable_distracted_ratio=args.vulnerable_distracted_ratio,
+        vulnerable_pause_prob=args.vulnerable_pause_prob,
+        vulnerable_pause_steps_mean=args.vulnerable_pause_steps_mean,
+        spawn_human_num=int(args.spawn_human_num * den_scale),
+        spawn_wheelchairman_num=max(1, int(args.spawn_human_num // 20)),
+        spawn_elderly_num=args.spawn_elderly_num,
+        spawn_increase_per_episode=args.spawn_increase_per_episode,
+        spawn_edog_num=0,
+        spawn_erobot_num=0,
+        spawn_drobot_num=0,
+        max_actor_num=30,
+        ignore_success_done=args.ignore_success_done,
+        image_observation=True,
+        agent_observation=ThreeSourceMixObservation,
+        interface_panel=[],
+        sensors=dict(
+            rgb_camera=(RGBCamera, args.image_width, args.image_height),
+            depth_camera=(DepthCamera, 84, 84),
+            semantic_camera=(SemanticCamera, 84, 84),
+        ),
     )
-
-def build_image_state_env_config(image_width: int, image_height: int, training: bool) -> dict:
-    cfg = copy.deepcopy(ENV_CONFIG)
-    cfg["training"] = training
-    cfg.update(_get_sac_env_overrides())
-    cfg.update(
-        dict(
-            use_render=False,
-            image_observation=True,
-            agent_observation=ThreeSourceMixObservation,
-            interface_panel=[],
-
-            # social dynamic settings
-            scene_type="commercial",
-            scene_building_source="scene",
-            spawn_robot_on_sidewalk=True,
-            crossing_ped_num=8,
-            vulnerable_ped_num=4,
-            group_ped_pair_num=3,
-            spawn_elderly_num=2,
-            spawn_wheelchairman_num=1,
-            spawn_human_num=20,
-            pedestrian_sidewalk_only=False,
-            pedestrian_allow_crosswalk=False,
-
-            sensors=dict(
-                rgb_camera=(RGBCamera, image_width, image_height),
-                depth_camera=(DepthCamera, 84, 84),
-                semantic_camera=(SemanticCamera, 84, 84),
-            ),
-        )
-    )
-
-    if "vehicle_config" in cfg:
-        cfg["vehicle_config"] = copy.deepcopy(cfg["vehicle_config"])
-        cfg["vehicle_config"].update(
-            dict(
-                show_lidar=False,
-                show_navi_mark=False,
-                show_line_to_navi_mark=False,
-                show_dest_mark=False,
-            )
-        )
-    return cfg
 
 
 def make_env(
@@ -535,7 +563,7 @@ def make_env(
     def _init():
         patch_orca_planning_fallback()
 
-        cfg = copy.deepcopy(env_cfg)
+        cfg = dict(env_cfg)
         cfg["start_seed"] = int(seed)
         cfg["log_level"] = 50
 
@@ -574,8 +602,8 @@ def inspect_vec_obs(obs, prefix="obs"):
 
 
 def build_train_and_eval_envs(args):
-    train_cfg = build_image_state_env_config(args.image_width, args.image_height, training=True)
-    eval_cfg = build_image_state_env_config(args.image_width, args.image_height, training=True)
+    train_cfg = build_config(args)
+    eval_cfg = build_config(args)
 
     train_seeds = [args.seed + i for i in range(args.n_envs)]
 
@@ -640,12 +668,8 @@ def build_train_and_eval_envs(args):
 
     return env, eval_env, train_seeds, eval_seeds
 
-class SafeEvalCallback(EvalCallback):
-    """
-    EvalCallback that never crashes training.
-    If evaluation fails (e.g. env.reset() error), skip this eval round and continue.
-    """
 
+class SafeEvalCallback(EvalCallback):
     def _on_step(self) -> bool:
         try:
             return super()._on_step()
@@ -653,13 +677,102 @@ class SafeEvalCallback(EvalCallback):
             print(f"[WARN] Eval failed, skipping this round: {repr(e)}")
             return True
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train image+state SAC on MetaUrban")
+
+    parser.add_argument("--total_timesteps", type=int, default=300000)
+    parser.add_argument("--n_envs", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--eval_freq", type=int, default=20_000)
+    parser.add_argument("--checkpoint_freq", type=int, default=20_000)
+    parser.add_argument("--log_dir", type=str, default="./midterm_logs/SAC_image_state")
+    parser.add_argument(
+        "--resume_from",
+        type=str,
+        default="./sac_imgstate_260000_steps.zip",
+        help="Path to a .zip model to resume",
+    )
+
+    parser.add_argument("--image_width", type=int, default=80)
+    parser.add_argument("--image_height", type=int, default=60)
+    parser.add_argument("--buffer_size", type=int, default=100_000)
+    parser.add_argument("--learning_starts", type=int, default=5_000)
+    parser.add_argument("--batch_size", type=int, default=128)
+
+    parser.add_argument("--idle_penalty", type=float, default=0.1)
+    parser.add_argument("--speed_threshold", type=float, default=0.3)
+    parser.add_argument("--debug_reset", action="store_true")
+    parser.add_argument("--disable_eval", action="store_true")
+
+    parser.add_argument(
+        "--student_model_path",
+        type=str,
+        default="/home/howardhan/metaurban/recorded_dataset/student_runs/20260420_170419/best_student_image_ego_action.pt",
+    )
+    parser.add_argument("--student_reward_scale", type=float, default=0.05) # 02 1.0
+    parser.add_argument("--student_negative_reward", type=float, default=-1.0)
+    parser.add_argument("--student_neutral_reward", type=float, default=0.0)
+    parser.add_argument("--student_positive_reward", type=float, default=1.0)
+    parser.add_argument("--student_device", type=str, default="auto")
+
+    parser.add_argument("--map", type=str, default="C")
+    parser.add_argument("--horizon", type=int, default=300)
+    parser.add_argument("--num_scenarios", type=int, default=100)
+    parser.add_argument("--object_density", type=float, default=0.01)
+
+    parser.add_argument("--scene_type", type=str, default="default",
+                        choices=["default", "commercial", "commute", "leisure", "constrained"])
+    parser.add_argument("--scene_building_source", type=str, default="default",
+                        choices=["scene", "default"])
+
+    parser.add_argument("--crossing_ped_num", type=int, default=2)
+    parser.add_argument("--vulnerable_ped_num", type=int, default=2)
+
+    parser.add_argument("--group_cluster_num", type=int, default=4)
+    parser.add_argument("--group_cluster_size_min", type=int, default=3)
+    parser.add_argument("--group_cluster_size_max", type=int, default=5)
+    parser.add_argument("--group_spawn_near_ego", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--group_spawn_min_radius", type=float, default=12.0)
+    parser.add_argument("--group_spawn_max_radius", type=float, default=18.0)
+    parser.add_argument("--group_route_min_ego_distance", type=float, default=8.0)
+    parser.add_argument("--group_route_min_separation", type=float, default=5.5)
+    parser.add_argument("--group_route_start_exclusion_points", type=int, default=2)
+    parser.add_argument("--group_route_start_exclusion_radius", type=float, default=6.0)
+    parser.add_argument("--group_member_radius", type=float, default=1.6)
+    parser.add_argument("--group_member_ring_step", type=float, default=0.62)
+    parser.add_argument("--group_member_radius_jitter", type=float, default=0.16)
+    parser.add_argument("--group_member_ring_step_jitter", type=float, default=0.12)
+    parser.add_argument("--group_member_idle_shift_prob", type=float, default=0.015)
+    parser.add_argument("--group_member_idle_shift_steps_mean", type=int, default=18)
+    parser.add_argument("--group_member_idle_shift_radius", type=float, default=0.22)
+    parser.add_argument("--group_release_enable", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--group_release_steps_mean", type=int, default=180)
+    parser.add_argument("--group_release_steps_std", type=int, default=40)
+    parser.add_argument("--group_release_steps_min", type=int, default=60)
+
+    parser.add_argument("--vulnerable_elderly_ratio", type=float, default=0.6)
+    parser.add_argument("--vulnerable_distracted_ratio", type=float, default=0.4)
+    parser.add_argument("--vulnerable_pause_prob", type=float, default=0.02)
+    parser.add_argument("--vulnerable_pause_steps_mean", type=int, default=16)
+
+    parser.add_argument("--spawn_human_num", type=int, default=50)
+    parser.add_argument("--spawn_increase_per_episode", type=int, default=0)
+    parser.add_argument("--spawn_elderly_num", type=int, default=0)
+    parser.add_argument("--ignore_success_done", action=argparse.BooleanOptionalAction, default=False)
+
+    return parser.parse_args()
+
+
 def main():
     args = parse_args()
     set_random_seed(args.seed)
 
     run_name = f"sac_imgstate_seed{args.seed}_{datetime.now().strftime('%m%d_%H%M')}"
     log_dir = os.path.join(args.log_dir, run_name)
+    tb_log_dir = os.path.join(log_dir, "tb_logs")
     os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(tb_log_dir, exist_ok=True)
 
     env = None
     eval_env = None
@@ -669,7 +782,6 @@ def main():
 
         print(f"=== Training image+state SAC for {args.total_timesteps} steps with {args.n_envs} envs ===")
         print(f"    image size: {args.image_width}x{args.image_height}")
-        print(f"    reward overrides: {_get_sac_env_overrides()}")
         print(f"    idle penalty: -{args.idle_penalty}/step when speed < {args.speed_threshold} km/h")
         print(
             f"    buffer={args.buffer_size} | learning_starts={args.learning_starts} | "
@@ -678,6 +790,7 @@ def main():
         print(f"    train_seeds: {train_seeds}")
         print(f"    eval_seeds: {eval_seeds}")
         print(f"    logs: {log_dir}")
+        print(f"    tensorboard: {tb_log_dir}")
 
         print(f"[DEBUG] train obs space: {env.observation_space}")
         print(f"[DEBUG] eval obs space:  {eval_env.observation_space}")
@@ -694,6 +807,7 @@ def main():
 
         if args.resume_from:
             model = SAC.load(args.resume_from, env=env, device="auto", seed=args.seed)
+            model.tensorboard_log = tb_log_dir
             print(f"Resumed SAC from {args.resume_from}")
         else:
             model = SAC(
@@ -709,9 +823,10 @@ def main():
                 gradient_steps=1,
                 verbose=1,
                 seed=args.seed,
-                tensorboard_log=os.path.join(log_dir, "tb_logs"),
+                tensorboard_log=tb_log_dir,
                 device="auto",
             )
+            print("Created new SAC model.")
 
         checkpoint_cb = CheckpointCallback(
             save_freq=max(args.checkpoint_freq // max(args.n_envs, 1), 1),
@@ -719,9 +834,12 @@ def main():
             name_prefix="sac_imgstate",
         )
 
+        vlm_callback = VLMRewardLoggerCallback()
+
+        callback_list = [checkpoint_cb, vlm_callback]
+
         if args.disable_eval:
             print("[INFO] EvalCallback disabled. Training will run without periodic evaluation.")
-            callbacks = CallbackList([checkpoint_cb])
         else:
             eval_cb = SafeEvalCallback(
                 eval_env,
@@ -732,15 +850,17 @@ def main():
                 deterministic=True,
                 render=False,
             )
-            vlm_callback = VLMRewardLoggerCallback()
+            callback_list.insert(1, eval_cb)
 
-            callbacks = CallbackList([
-                checkpoint_cb,
-                eval_cb,
-                vlm_callback,
-            ])
+        callbacks = CallbackList(callback_list)
 
-        model.learn(total_timesteps=args.total_timesteps, callback=callbacks)
+        model.learn(
+            total_timesteps=args.total_timesteps,
+            callback=callbacks,
+            tb_log_name="SAC_image_state",
+            reset_num_timesteps=not bool(args.resume_from),
+        )
+
         model.save(os.path.join(log_dir, "final_model"))
         print(f"=== SAC training complete. Model saved to {log_dir}/final_model.zip ===")
 

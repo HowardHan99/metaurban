@@ -14,7 +14,7 @@ from gymnasium import spaces
 from stable_baselines3 import SAC
 from stable_baselines3.common.monitor import Monitor
 
-from metaurban import SidewalkStaticMetaUrbanEnv
+from metaurban import SidewalkStaticMetaUrbanEnv, SocialDynamicMetaUrbanEnv
 from metaurban.component.sensors.depth_camera import DepthCamera
 from metaurban.component.sensors.rgb_camera import RGBCamera
 from metaurban.component.sensors.semantic_camera import SemanticCamera

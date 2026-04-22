@@ -1,0 +1,12 @@
+# logs
+midterm_logs/
+
+# tensorboard
+*.tfevents*
+
+# models
+*.zip
+
+# python cache
+__pycache__/
+*.pyc

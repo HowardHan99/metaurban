@@ -73,18 +73,18 @@ METAURBAN_DEFAULT_CONFIG = dict(
 
     # ===== Reward Scheme =====
     # See: https://github.com/metaurbanrse/metaurban/issues/283
-    success_reward=5.0,
+    success_reward=30.0,#5.0
     out_of_road_penalty=5.0,
     on_lane_line_penalty=1.,
     crash_vehicle_penalty=1.,
     crash_object_penalty=1.0,
-    crash_human_penalty=1.0,
-    driving_reward=1.0,
-    steering_range_penalty=0.5,
+    crash_human_penalty=3.0,
+    driving_reward=1.5, # 1,0
+    steering_range_penalty=0.3, # 0.5
     heading_penalty=1.0,
     lateral_penalty=.5,
     max_lateral_dist=2,
-    no_negative_reward=True,
+    no_negative_reward=False, #False
 
     # ===== Cost Scheme =====
     crash_vehicle_cost=1.0,
