@@ -31,6 +31,27 @@
             height: 100%;
             border: 0;
         }
+        .vlm-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+        .vlm-grid figure {
+            margin: 0;
+            text-align: center;
+        }
+        .vlm-grid video {
+            width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            background: #000;
+        }
+        .vlm-grid figcaption {
+            margin-top: 0.5rem;
+            font-size: 0.95rem;
+            color: #555;
+        }
     </style>
 </head>
 <body>
@@ -66,6 +87,29 @@
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowfullscreen>
         </iframe>
+    </div>
+
+    <h2>VLM Guidance Ablation</h2>
+    <p>Effect of the VLM guidance factor on agent behavior.</p>
+    <div class="vlm-grid">
+        <figure>
+            <video controls muted playsinline preload="metadata">
+                <source src="vids/novlm.mp4" type="video/mp4">
+            </video>
+            <figcaption>No VLM (baseline)</figcaption>
+        </figure>
+        <figure>
+            <video controls muted playsinline preload="metadata">
+                <source src="vids/vlm005.mp4" type="video/mp4">
+            </video>
+            <figcaption>VLM factor = 0.05</figcaption>
+        </figure>
+        <figure>
+            <video controls muted playsinline preload="metadata">
+                <source src="vids/vlm-02.mp4" type="video/mp4">
+            </video>
+            <figcaption>VLM factor = 0.2</figcaption>
+        </figure>
     </div>
 </body>
 </html>
