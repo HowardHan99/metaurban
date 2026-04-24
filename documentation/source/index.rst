@@ -64,6 +64,34 @@ Please feel free to contact us if you have any suggestions or ideas!
     <iframe width="800" height="480" src="https://www.youtube.com/embed/vHuAzNxmfKc" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
     </div>
 
+VLM Guidance Ablation
+#####################
+
+Comparison across VLM guidance factors:
+
+.. raw:: html
+
+    <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; margin: 1rem 0;">
+      <figure style="margin: 0; text-align: center;">
+        <video width="380" controls muted playsinline>
+          <source src="novlm.mp4" type="video/mp4">
+        </video>
+        <figcaption>No VLM (baseline)</figcaption>
+      </figure>
+      <figure style="margin: 0; text-align: center;">
+        <video width="380" controls muted playsinline>
+          <source src="vlm005.mp4" type="video/mp4">
+        </video>
+        <figcaption>VLM factor = 0.05</figcaption>
+      </figure>
+      <figure style="margin: 0; text-align: center;">
+        <video width="380" controls muted playsinline>
+          <source src="vlm-02.mp4" type="video/mp4">
+        </video>
+        <figcaption>VLM factor = 0.2</figcaption>
+      </figure>
+    </div>
+
 Citation
 ########
 
