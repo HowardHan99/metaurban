@@ -393,7 +393,7 @@ def parse_args():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="/home/howardhan/metaurban/midterm_logs/SAC_image_state/sac_imgstate_seed0_0421_1030/checkpoints/sac_imgstate_460000_steps.zip",
+        default="/home/howardhan/metaurban/sac_imgstate_260000_steps.zip",
     )
     parser.add_argument("--seed", type=int, default=20)
     parser.add_argument("--steps", type=int, default=5000)
