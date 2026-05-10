@@ -42,3 +42,4 @@ documentation/SOCIAL_OFFLINE_DEV_LOG.md
 recorded_dataset/
 midterm_logs/
 *.tfevents*
+/Robotlearning-class-experiments
