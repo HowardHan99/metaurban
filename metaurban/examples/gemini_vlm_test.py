@@ -6,8 +6,6 @@ import numpy as np
 from PIL import Image
 from google import genai
 
-# export GEMINI_API_KEY="AIzaSyDYap3QssTLVpNo4URFF8wd7GDXSZl_71c"
-
 IMAGE_DIR = Path("./recorded_dataset/rgb_merged")
 DATA_DIR = Path("./recorded_dataset/data_merged")
 
