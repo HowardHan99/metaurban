@@ -43,3 +43,5 @@ recorded_dataset/
 midterm_logs/
 *.tfevents*
 /Robotlearning-class-experiments
+/final/final_logs
+/Robotlearning-old-experiments
