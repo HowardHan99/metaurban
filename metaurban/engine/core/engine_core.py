@@ -293,8 +293,15 @@ class EngineCore(ShowBase.ShowBase):
                         use_330=True
                     )
                 else:
+                    pbr_msaa_samples = 0 if (
+                        self.mode == RENDER_MODE_OFFSCREEN
+                        and self.pipe.getType().getName() == "eglGraphicsPipe"
+                    ) else 16
                     self.pbrpipe = init(
-                        msaa_samples=16,
+                        # Mesa's surfaceless EGL path cannot allocate the
+                        # 16-sample floating-point PBR target.  The main output
+                        # remains full resolution; only headless MSAA is off.
+                        msaa_samples=pbr_msaa_samples,
                         use_hardware_skinning=True,
                         # use_normal_maps=True,
                         use_330=False

@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
 """
-collect_dataset.py — CLI entry point for building the offline social-reward dataset.
+collect_dataset.py — build an episode-structured VLM social-reward dataset.
 
 Usage examples
 --------------
-# Random policy, 100 episodes, no rendering (headless):
-python collect_dataset.py --num-episodes 100 --out-dir /data/social_offline
-
-# IDM policy, 200 episodes, save RGB frames, 6 s clips with 3 s stride:
+# IDM policy, sample every five simulator decisions:
 python collect_dataset.py --policy idm --num-episodes 200 \\
-    --capture-rgb --clip-len 6.0 --stride 3.0 \\
+    --capture-rgb --sampling-interval 5 \\
     --out-dir /data/social_offline
 
 After collection the output directory will contain:
   <out-dir>/
-      episodes/   ← one .npz per episode (full trajectory)
-      clips/      ← one .npz per sliding-window clip
+      manifest.json
+      episodes/<episode-id>/
+          episode.json
+          records.jsonl
+          frames/*.png
 """
 
 import argparse
+import hashlib
+import json
 import logging
 import os
+import subprocess
 import sys
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -40,7 +45,7 @@ logger = logging.getLogger("collect_dataset")
 # Policy helpers
 # ---------------------------------------------------------------------------
 
-def _build_policy(name: str, env):
+def _build_policy(name: str, env, policy_path: str = None):
     """Return a callable ``obs -> action`` for the requested policy type."""
     if name == "random":
         return lambda obs: env.action_space.sample()
@@ -54,20 +59,43 @@ def _build_policy(name: str, env):
             class _IDMWrapper:
                 def __init__(self, env):
                     self._env = env
+                    self._agent = None
+                    self._policy = None
 
                 def __call__(self, obs):
-                    agent  = self._env.agent
-                    # IDMPolicy expects an integer seed (or None), not a Generator.
-                    policy_seed = getattr(self._env, "current_seed", None)
-                    policy = IDMPolicy(agent, policy_seed)
-                    return policy.act("default_agent")
+                    agent = self._env.agent
+                    if agent is not self._agent:
+                        # IDMPolicy expects an integer seed (or None), not a Generator.
+                        policy_seed = getattr(self._env, "current_seed", None)
+                        self._agent = agent
+                        self._policy = IDMPolicy(agent, policy_seed)
+                    return self._policy.act("default_agent")
 
             return _IDMWrapper(env)
         except Exception as exc:
             logger.warning("IDMPolicy unavailable (%s); falling back to random.", exc)
             return lambda obs: env.action_space.sample()
 
-    raise ValueError(f"Unknown policy '{name}'. Choose from: random, idm")
+    if name == "ppo":
+        if not policy_path:
+            raise ValueError("--policy-path is required for --policy ppo")
+        from stable_baselines3 import PPO
+
+        model = PPO.load(policy_path, device="cpu")
+
+        def ppo_policy(obs):
+            state = obs.get("state") if isinstance(obs, dict) else obs
+            state = np.asarray(state, dtype=np.float32)
+            if state.shape != model.observation_space.shape:
+                raise ValueError(
+                    f"PPO expects observation {model.observation_space.shape}, got {state.shape}"
+                )
+            action, _ = model.predict(state, deterministic=True)
+            return np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+
+        return ppo_policy
+
+    raise ValueError(f"Unknown policy '{name}'. Choose from: random, idm, ppo")
 
 
 # ---------------------------------------------------------------------------
@@ -84,16 +112,20 @@ def parse_args(argv=None):
     p.add_argument("--out-dir", type=str, default="dataset",
                    help="Root output directory.")
     p.add_argument("--policy", type=str, default="random",
-                   choices=["random", "idm"],
+                   choices=["random", "idm", "ppo"],
                    help="Policy used to drive the ego vehicle.")
+    p.add_argument("--policy-path", type=str, default=None,
+                   help="Stable-Baselines3 PPO checkpoint used by --policy ppo.")
     p.add_argument("--sim-hz", type=float, default=10.0,
-                   help="Simulator decision frequency in Hz.")
-    p.add_argument("--clip-len", type=float, default=4.0,
-                   help="Sliding window clip length in seconds.")
-    p.add_argument("--stride", type=float, default=2.0,
-                   help="Stride between clip start positions in seconds.")
+                   help="Expected simulator decision frequency in Hz (manifest metadata only).")
+    p.add_argument("--sampling-interval", type=int, default=5,
+                   help="Save every Nth simulator transition; terminal transitions are always saved.")
     p.add_argument("--capture-rgb", action="store_true",
-                   help="Save RGB camera frames (requires render mode).")
+                   help="Save RGB camera frames using the offscreen image observation.")
+    p.add_argument("--image-width", type=int, default=512,
+                   help="Saved RGB frame width.")
+    p.add_argument("--image-height", type=int, default=288,
+                   help="Saved RGB frame height.")
     p.add_argument("--use-render", action="store_true",
                    help="Open a render window (implies headless=False).")
     p.add_argument("--map", type=str, default="XCS",
@@ -182,8 +214,6 @@ def parse_args(argv=None):
                    help="Number of pedestrians spawned per scenario.")
     p.add_argument("--horizon", type=int, default=1000,
                    help="Maximum steps per episode.")
-    p.add_argument("--skip-clips", action="store_true",
-                   help="Skip the sliding-window clip extraction step.")
     p.add_argument("--seed", type=int, default=None,
                    help="Base random seed (None = fully random).")
     p.add_argument(
@@ -201,18 +231,72 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
+def _git_metadata(repo_root: Path):
+    def run(*args):
+        try:
+            return subprocess.run(
+                ["git", *args], cwd=repo_root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+    return {
+        "commit": run("rev-parse", "HEAD"),
+        "working_tree_dirty": bool(run("status", "--porcelain")),
+    }
+
+
+def _sha256(path: Path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _json_safe(value):
+    """Convert configuration objects to stable, human-readable JSON values."""
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, type):
+        return f"{value.__module__}.{value.__qualname__}"
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 def main(argv=None):
     args = parse_args(argv)
+    if not args.capture_rgb:
+        raise ValueError("--capture-rgb is required for the VLM raw dataset")
+    if args.sampling_interval < 1:
+        raise ValueError("--sampling-interval must be at least 1")
+    if args.image_width < 1 or args.image_height < 1:
+        raise ValueError("--image-width and --image-height must be positive")
+    if args.num_scenarios < 1:
+        raise ValueError("--num-scenarios must be at least 1")
+
+    # On a Linux host without an X display, Panda3D's default GLX pipe cannot
+    # create the offscreen window used by MainCamera.  Select Panda3D's bundled
+    # EGL pipe before importing MetaUrban; surfaceless EGL works with both Mesa
+    # software rendering and headless GPU drivers.
+    if not args.use_render and sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+        os.environ.setdefault("EGL_PLATFORM", "surfaceless")
+        from panda3d.core import loadPrcFileData
+        loadPrcFileData("", "load-display p3headlessgl")
 
     # Resolve output paths
-    root      = Path(args.out_dir)
-    ep_dir    = root / "episodes"
-    clip_dir  = root / "clips"
+    root = Path(args.out_dir)
+    ep_dir = root / "episodes"
+    root.mkdir(parents=True, exist_ok=True)
+    if (root / "manifest.json").exists() or (ep_dir.exists() and any(ep_dir.iterdir())):
+        raise FileExistsError(f"Refusing to append to non-empty dataset directory: {root}")
     ep_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Output directory : %s", root.resolve())
     logger.info("Episodes dir     : %s", ep_dir)
-    logger.info("Clips dir        : %s", clip_dir)
 
     # ------------------------------------------------------------------
     # Build environment config
@@ -227,13 +311,24 @@ def main(argv=None):
         spawn_edog_num=0,
         spawn_erobot_num=0,
         spawn_drobot_num=0,
-        max_actor_num=1,
+        # The repository PPO checkpoint was trained with a 271-D state that
+        # includes up to 50 surrounding actors.  Other policies do not consume
+        # this state, so retain the smaller observation there.
+        max_actor_num=50 if args.policy == "ppo" else 1,
         show_ego_navigation=False,
         horizon=args.horizon,
         num_scenarios=args.num_scenarios,
         decision_repeat=1,
-        window_size=(960, 960) if args.use_render else (84, 84),
-        vehicle_config=dict(show_lidar=False, show_navi_mark=True),
+        image_observation=True,
+        # Panda3D's threaded Cull mode cannot create a surfaceless EGL
+        # context on headless hosts.  Collection is I/O-bound at this scale,
+        # so use the portable single-threaded renderer.
+        multi_thread_render=False,
+        norm_pixel=False,
+        stack_size=1,
+        window_size=(args.image_width, args.image_height),
+        sensors=dict(main_camera=("MainCamera", args.image_width, args.image_height)),
+        vehicle_config=dict(show_lidar=False, show_navi_mark=False, image_source="main_camera"),
         crossing_ped_num=args.crossing_ped_num,
         signaling_ped_num=args.signaling_ped_num,
         vulnerable_ped_num=args.vulnerable_ped_num,
@@ -271,6 +366,10 @@ def main(argv=None):
         env_config["scene_type"] = "default"
         env_config["scene_building_source"] = "default"
 
+    if args.policy == "ppo":
+        from metaurban.social_reward.observations import MainCameraLidarStateObservation
+        env_config["agent_observation"] = MainCameraLidarStateObservation
+
     # ------------------------------------------------------------------
     # Instantiate environment
     # ------------------------------------------------------------------
@@ -291,66 +390,104 @@ def main(argv=None):
     # ------------------------------------------------------------------
     # Build policy
     # ------------------------------------------------------------------
-    obs, info = env.reset(seed=args.seed)
-    policy_fn = _build_policy(args.policy, env)
+    policy_fn = _build_policy(args.policy, env, args.policy_path)
     logger.info("Policy: %s", args.policy)
 
     # ------------------------------------------------------------------
     # Collect episodes
     # ------------------------------------------------------------------
-    from metaurban.social_reward.dataset_collector import EpisodeBuffer, _get_rgb_frame
+    from metaurban.social_reward.dataset_collector import (
+        COLLECTOR_VERSION,
+        RAW_DATASET_VERSION,
+        StructuredEpisodeWriter,
+    )
 
-    written_episodes = []
+    episode_summaries = []
     rng = np.random.default_rng(args.seed)
+    created_at = datetime.now(timezone.utc).isoformat()
 
     for ep_idx in range(args.num_episodes):
         # Reset (seeded for reproducibility)
-        ep_seed = int(rng.integers(0, 2**31 - 1)) if args.seed is not None else None
+        # MetaUrban uses ``seed`` as a scenario index and requires it to stay
+        # within the configured scenario pool.  Walk that pool deterministically
+        # from the requested base seed instead of generating an arbitrary int32.
+        if args.seed is None:
+            ep_seed = int(rng.integers(0, args.num_scenarios))
+        else:
+            ep_seed = int((args.seed + ep_idx) % args.num_scenarios)
         obs, info = env.reset(seed=ep_seed)
         scenario_idx = info.get("scenario_index", ep_idx)
-        buf = EpisodeBuffer(scenario_index=scenario_idx, seed=ep_seed or ep_idx)
+        episode_id = f"episode_{ep_idx:06d}_s{int(scenario_idx):06d}_seed{ep_seed}"
+        writer = StructuredEpisodeWriter(
+            dataset_root=root,
+            episode_id=episode_id,
+            scenario_index=scenario_idx,
+            seed=ep_seed,
+            sampling_interval=args.sampling_interval,
+        )
 
         terminated = truncated = False
+        simulator_steps = 0
         while not (terminated or truncated):
             action = policy_fn(obs)
             obs, reward, terminated, truncated, info = env.step(action)
-            buf.record(obs, action, reward, info, env)
+            writer.record(
+                step_index=simulator_steps,
+                post_obs=obs,
+                action_from_previous_state=action,
+                environment_reward=reward,
+                info=info,
+                env=env,
+                terminated=terminated,
+                truncated=truncated,
+            )
+            simulator_steps += 1
 
-        ep_path = buf.flush(ep_dir)
-        written_episodes.append(ep_path)
+        summary = writer.close(
+            simulator_steps=simulator_steps,
+            terminated=terminated,
+            truncated=truncated,
+        )
+        episode_summaries.append(summary)
         logger.info(
-            "[%d/%d]  scenario=%d  steps=%d  seed=%s  -> %s",
+            "[%d/%d] scenario=%d simulator_steps=%d records=%d seed=%s -> %s",
             ep_idx + 1, args.num_episodes,
-            scenario_idx, len(buf), ep_seed, ep_path.name,
+            scenario_idx, simulator_steps, writer.record_count, ep_seed, episode_id,
         )
 
     env.close()
-    logger.info("Collection finished.  %d episodes saved to %s", len(written_episodes), ep_dir)
-
-    # ------------------------------------------------------------------
-    # Sliding-window clip extraction
-    # ------------------------------------------------------------------
-    if args.skip_clips:
-        logger.info("--skip-clips set; skipping clip extraction.")
-        return
-
-    from metaurban.social_reward.dataset_collector import ClipExtractor
-
-    window_steps = max(1, int(args.clip_len  * args.sim_hz))
-    stride_steps = max(1, int(args.stride    * args.sim_hz))
-
+    scenario_distribution = Counter(str(s["scenario_index"]) for s in episode_summaries)
+    repo_root = Path(__file__).resolve().parents[2]
+    collector_source = Path(__file__).resolve()
+    writer_source = collector_source.with_name("dataset_collector.py")
+    manifest = {
+        "dataset_version": RAW_DATASET_VERSION,
+        "collector_version": COLLECTOR_VERSION,
+        "collector_git": _git_metadata(repo_root),
+        "collector_source_sha256": {
+            "collect_dataset.py": _sha256(collector_source),
+            "dataset_collector.py": _sha256(writer_source),
+        },
+        "creation_timestamp_utc": created_at,
+        "environment_configuration": _json_safe(env_config),
+        "collection_configuration": {
+            "policy": args.policy,
+            "sampling_interval": args.sampling_interval,
+            "expected_sim_hz": args.sim_hz,
+            "base_seed": args.seed,
+        },
+        "number_of_episodes": len(episode_summaries),
+        "number_of_records": sum(s["record_count"] for s in episode_summaries),
+        "scenario_distribution": dict(sorted(scenario_distribution.items())),
+        "episode_seeds": [s["seed"] for s in episode_summaries],
+    }
+    (root / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8"
+    )
     logger.info(
-        "Extracting clips: window=%ds (%d steps), stride=%ds (%d steps) …",
-        int(args.clip_len), window_steps, int(args.stride), stride_steps,
+        "Collection finished. %d episodes and %d records saved to %s",
+        manifest["number_of_episodes"], manifest["number_of_records"], root,
     )
-
-    extractor = ClipExtractor(
-        window_steps=window_steps,
-        stride_steps=stride_steps,
-        sim_hz=args.sim_hz,
-    )
-    all_clips = extractor.extract_batch(ep_dir, clip_dir)
-    logger.info("Done.  %d clips saved to %s", len(all_clips), clip_dir)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,46 @@ class MainCamera(BaseSensor):
 
     num_channels = 3
 
+    @staticmethod
+    def _cpu_tonemap_headless_egl(engine):
+        """Read the main 3-D camera's HDR target and apply simplepbr tone mapping.
+
+        With surfaceless EGL, the scene camera renders correctly but the final
+        filter-quad display region can be black.  Reading the camera-bound HDR
+        target avoids depending on display-region numbering and reproduces the
+        exact filmic curve used by ``simplepbr/tonemap.frag``.
+        """
+        if engine.cam.node().getNumDisplayRegions() != 1:
+            raise RuntimeError("Main camera must have exactly one display region")
+
+        engine.graphicsEngine.renderFrame()
+        texture = engine.cam.node().getDisplayRegion(0).getScreenshot()
+        width, height = texture.getXSize(), texture.getYSize()
+        ram = texture.getRamImageAs("RGB").getData()
+        bytes_per_pixel = len(ram) // (width * height)
+        if bytes_per_pixel == 12:
+            rgb = np.frombuffer(ram, dtype=np.float32).reshape(height, width, 3)
+            nonfinite_fraction = float(np.count_nonzero(~np.isfinite(rgb)) / rgb.size)
+            # Mesa may produce a sparse set of undefined fragments around
+            # problematic asset edges.  Sanitise only a sub-1% minority; a
+            # larger affected region indicates a genuinely corrupt frame.
+            if nonfinite_fraction > 0.01:
+                raise RuntimeError(
+                    "Headless HDR camera contains too many non-finite values: "
+                    "{:.4%}".format(nonfinite_fraction)
+                )
+            rgb = np.nan_to_num(rgb, nan=0.0, posinf=1.0, neginf=0.0)
+            rgb = np.maximum(rgb - 0.004, 0.0)
+            rgb = (rgb * (6.2 * rgb + 0.5)) / (rgb * (6.2 * rgb + 1.7) + 0.06)
+            rgb = np.clip(rgb * 255.0, 0, 255).astype(np.uint8)
+        elif bytes_per_pixel == 3:
+            rgb = np.frombuffer(ram, dtype=np.uint8).reshape(height, width, 3)
+        else:
+            raise RuntimeError(
+                "Unsupported main-camera RGB RAM format: {} bytes/pixel".format(bytes_per_pixel)
+            )
+        return np.ascontiguousarray(rgb[::-1])
+
     def __init__(self, engine, camera_height: float, camera_dist: float):
         self._origin_height = camera_height
         self.run_task = True
@@ -508,6 +548,11 @@ class MainCamera(BaseSensor):
         if self.enable_cuda:
             assert self.cuda_rendered_result is not None
             img = self.cuda_rendered_result[..., :-1][..., ::-1][::-1]
+        elif (
+            engine.mode == constants.RENDER_MODE_OFFSCREEN
+            and engine.pipe.getType().getName() == "eglGraphicsPipe"
+        ):
+            img = self._cpu_tonemap_headless_egl(engine)
         else:
             origin_img = engine.win.getDisplayRegion(1).getScreenshot()
             img = np.frombuffer(origin_img.getRamImage().getData(), dtype=np.uint8)
