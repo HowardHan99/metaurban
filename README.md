@@ -215,6 +215,13 @@ Run the following command to launch a simple scenario with manual control. Press
 python -m metaurban.examples.drive_in_dynamic_env
 --density_obj 0.4 --density_ped 1.0
 ```
+
+## VLM Social-Reward Post-Training
+
+This branch adds a reproducible LoRA/QLoRA pipeline for adapting the 7B-class (published 8B-parameter) `Qwen/Qwen2.5-VL-7B-Instruct` model to MetaUrban social navigation. It learns three-way social-behavior classification from post-transition RGB observations plus ego speed and heading, with trajectory-level train/validation/test splits. A resulting PEFT adapter can optionally be loaded by the downstream PPO online reward pipeline.
+
+The implementation is ready, but no large-model training run is claimed yet. See [MetaUrban VLM Post-Training Evidence](VLM_TRAINING_EVIDENCE.md) for code links, the evidence boundary, and current status.
+
 ## 🤖 Run a Pre-Trained (PPO) Model 
 
 We provide RL models trained on the task of navigation, which can be used to preview the performance of RL agents.

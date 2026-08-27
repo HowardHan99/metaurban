@@ -137,6 +137,12 @@ parser.add_argument("--ignore_success_done", action=argparse.BooleanOptionalActi
 
 # online VLM extras
 parser.add_argument("--spawn_robot_on_sidewalk", action=argparse.BooleanOptionalAction, default=False)
+parser.add_argument(
+    "--vlm_adapter_path",
+    type=str,
+    default=None,
+    help="Optional PEFT adapter. Its adapter config selects the matching base VLM.",
+)
 args = parser.parse_args()
 
 set_random_seed(args.unique_id)
@@ -238,6 +244,7 @@ config = dict(
         # ===== Online VLM reward =====
         use_vlm_reward=True,
         vlm_model_name="Qwen/Qwen2-VL-2B-Instruct",
+        vlm_adapter_path=args.vlm_adapter_path,
         vlm_device=args.device,
         vlm_dtype="bfloat16",
         vlm_query_interval=5,

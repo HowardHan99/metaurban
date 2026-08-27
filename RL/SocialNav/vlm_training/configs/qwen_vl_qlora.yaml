@@ -1,0 +1,43 @@
+model:
+  base_model: Qwen/Qwen2.5-VL-7B-Instruct
+  published_scale: 8B parameters
+  device_map: auto
+  trust_remote_code: false
+
+quantization:
+  use_4bit: true
+  quant_type: nf4
+  double_quant: true
+  compute_dtype: bfloat16
+
+lora:
+  rank: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+training:
+  learning_rate: 0.0002
+  epochs: 3
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 16
+  precision: bfloat16
+  gradient_checkpointing: true
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+  seed: 42
+
+data:
+  max_sequence_length: 512
+  source_image_resolution: [512, 288]
+  min_pixels: 3136
+  max_pixels: 147456
+  num_workers: 0

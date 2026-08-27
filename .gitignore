@@ -45,3 +45,6 @@ midterm_logs/
 /Robotlearning-class-experiments
 /final/final_logs
 /Robotlearning-old-experiments
+
+# VLM post-training datasets, logs, checkpoints, adapters, and evaluations
+/experiments/vlm_social_reward/

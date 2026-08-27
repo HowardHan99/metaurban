@@ -119,6 +119,7 @@ METAURBAN_DEFAULT_CONFIG = dict(
     # ===== Online VLM Reward =====
     use_vlm_reward=True,
     vlm_model_name="Qwen/Qwen2-VL-2B-Instruct",
+    vlm_adapter_path=None,
     vlm_device="cuda",
     vlm_dtype="bfloat16",
     vlm_query_interval=3,
@@ -394,6 +395,21 @@ Return JSON with exactly this schema:
         if self._vlm_ready:
             return True
         try:
+            model_name = self.config["vlm_model_name"]
+            adapter_path = self.config.get("vlm_adapter_path")
+            peft_model_cls = None
+            if adapter_path:
+                try:
+                    from peft import PeftConfig, PeftModel
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "vlm_adapter_path was supplied, but PEFT is not installed"
+                    ) from exc
+                adapter_config = PeftConfig.from_pretrained(adapter_path)
+                if adapter_config.base_model_name_or_path:
+                    model_name = adapter_config.base_model_name_or_path
+                peft_model_cls = PeftModel
+
             dtype_name = str(self.config.get("vlm_dtype", "bfloat16")).lower()
             if dtype_name == "bfloat16":
                 torch_dtype = torch.bfloat16
@@ -404,24 +420,33 @@ Return JSON with exactly this schema:
 
             if self.config["vlm_device"] == "cuda":
                 self._vlm_model = AutoModelForImageTextToText.from_pretrained(
-                    self.config["vlm_model_name"],
+                    model_name,
                     torch_dtype=torch_dtype,
                     device_map="auto",
                 )
             else:
                 self._vlm_model = AutoModelForImageTextToText.from_pretrained(
-                    self.config["vlm_model_name"],
+                    model_name,
                     torch_dtype=torch_dtype,
                 ).to(self.config["vlm_device"])
 
+            if adapter_path:
+                self._vlm_model = peft_model_cls.from_pretrained(
+                    self._vlm_model,
+                    adapter_path,
+                )
+
             self._vlm_processor = AutoProcessor.from_pretrained(
-                self.config["vlm_model_name"],
+                model_name,
                 use_fast=True,
             )
 
             self._vlm_model.eval()
             self._vlm_ready = True
-            self.logger.info(f"Loaded VLM: {self.config['vlm_model_name']}")
+            if adapter_path:
+                self.logger.info(f"Loaded VLM: {model_name} with PEFT adapter: {adapter_path}")
+            else:
+                self.logger.info(f"Loaded VLM: {model_name}")
             return True
 
         except Exception as e:
@@ -519,6 +544,34 @@ Return JSON with exactly this schema:
         return np.array2string(action, precision=precision, separator=", ")
 
     def _build_vlm_messages(self, vehicle, vehicle_id, pil_image):
+        if self.config.get("vlm_adapter_path"):
+            # The post-trained adapter was supervised on this deliberately narrow,
+            # post-transition schema. Keep simulator/action/evaluation metadata out.
+            system_prompt = (
+                "You are a strict classifier of socially appropriate robot behavior in an urban "
+                "shared space. Judge only the post-transition observation. Return valid JSON only."
+            )
+            user_prompt = (
+                "Classify the social behavior visible in this single post-transition observation.\n\n"
+                "Use only:\n"
+                "- the RGB image as primary evidence\n"
+                f"- ego_speed: {float(vehicle.speed):.4f} m/s\n"
+                f"- ego_heading: {float(vehicle.heading_theta):.4f} rad\n\n"
+                "Choose exactly one label: NEGATIVE_SOCIAL, NEUTRAL, or POSITIVE_SOCIAL.\n"
+                "If there is no clear pedestrian interaction or social signal, choose NEUTRAL.\n"
+                'Return exactly one JSON object with no explanation: {"label":"<LABEL>"}'
+            )
+            return [
+                {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": pil_image},
+                        {"type": "text", "text": user_prompt},
+                    ],
+                },
+            ], user_prompt
+
         ego_state = self._get_ego_state_9d(vehicle, vehicle_id)
         ego_state_text = self._format_named_ego_state(ego_state)
 
